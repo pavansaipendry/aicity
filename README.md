@@ -201,7 +201,7 @@ python main.py
 
 All build documentation lives in `/docs`. Every step is recorded — what we built, why we built it, and every decision made along the way.
 
-- [00 — Master Log](docs/phase1/00_MASTER_LOG.md)
+- [00 — Master Log](aicity/blob/main/aicity/docs/phase1/00_master_log.md) 
 - [01 — Environment Setup](docs/01_PHASE1_SETUP.md)
 - [02 — The Agent Class](docs/02_PHASE1_AGENT.md)
 - [03 — Token Engine](docs/03_PHASE1_TOKENS.md)
