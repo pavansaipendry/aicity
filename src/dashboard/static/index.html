@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AIcity — Live Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=VT323&family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<canvas id="particles"></canvas>
+
+<div id="app">
+
+  <!-- ── Topbar ─────────────────────────────────────────────────────────── -->
+  <header id="topbar">
+    <div class="logo">AI<span>CITY</span></div>
+
+    <div class="topbar-stats">
+      <div class="stat-chip">
+        <span class="stat-label">Day</span>
+        <span class="stat-value" id="day-counter">—</span>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="stat-chip">
+        <span class="stat-label">Alive</span>
+        <span class="stat-value green" id="alive-counter">—</span>
+      </div>
+      <div class="stat-chip">
+        <span class="stat-label">Deaths</span>
+        <span class="stat-value red" id="death-counter">—</span>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="stat-chip">
+        <span class="stat-label">Vault</span>
+        <span class="stat-value gold" id="vault-top">—</span>
+      </div>
+      <div class="stat-chip">
+        <span class="stat-label">Events</span>
+        <span class="stat-value" id="event-count-top">0</span>
+      </div>
+    </div>
+
+    <div id="ws-status">
+      <div id="ws-dot"></div>
+      <span id="ws-label">CONNECTING</span>
+    </div>
+  </header>
+
+  <!-- ── Left: Citizens + Graveyard ────────────────────────────────────── -->
+  <aside id="col-agents">
+
+    <div class="col-heading">
+      <span>Citizens</span>
+      <span class="col-heading-count" id="citizen-count">0</span>
+    </div>
+
+    <div id="agents-list">
+      <div class="empty-state">
+        <div class="empty-dot"></div>
+        <div>Waiting for simulation...</div>
+      </div>
+    </div>
+
+    <!-- Graveyard -->
+    <div id="graveyard-section">
+      <div class="col-heading graveyard-heading" id="graveyard-toggle" onclick="toggleGraveyard()">
+        <span>Graveyard</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="col-heading-count red" id="graveyard-count">0</span>
+          <span class="graveyard-chevron" id="graveyard-chevron">+</span>
+        </div>
+      </div>
+      <div id="graveyard-list" class="graveyard-collapsed"></div>
+    </div>
+
+  </aside>
+
+  <!-- ── Center ─────────────────────────────────────────────────────────── -->
+  <main id="col-center">
+
+    <section id="hero">
+      <div id="hero-eyebrow">AIcity — Initializing</div>
+      <div id="hero-headline">The city waits.</div>
+      <div id="hero-sub">Connect a running simulation to see the live broadcast.</div>
+    </section>
+
+    <div class="center-tab-bar">
+      <button class="tab-btn active" data-tab="newspaper">Daily</button>
+      <button class="tab-btn" data-tab="economy">Economy</button>
+      <button class="tab-btn" data-tab="dispatches">Dispatches <span class="tab-badge" id="tab-badge-dispatches"></span></button>
+      <button class="tab-btn" data-tab="archives">Archives</button>
+    </div>
+
+    <section class="tab-panel active" id="tab-newspaper">
+      <div class="panel-heading">
+        <span id="newspaper-title">AIcity Daily</span>
+      </div>
+      <div id="newspaper-body" class="newspaper-body">No paper yet. The city is still young.</div>
+    </section>
+
+    <section class="tab-panel" id="tab-economy">
+      <div class="panel-heading">Wealth Distribution</div>
+      <div id="wealth-chart"></div>
+    </section>
+
+    <section class="tab-panel" id="tab-dispatches">
+      <div class="panel-heading">
+        <span>Agent Dispatches</span>
+        <span class="panel-count" id="msg-count">0 messages</span>
+      </div>
+      <div id="messages-list">
+        <div class="empty-state"><div class="empty-dot"></div><div>No messages yet</div></div>
+      </div>
+    </section>
+
+    <section class="tab-panel" id="tab-archives">
+      <div class="panel-heading">
+        <span>City Archives</span>
+        <div class="archive-filters">
+          <button class="filter-btn active" data-filter="all">All</button>
+          <button class="filter-btn" data-filter="daily">Daily</button>
+          <button class="filter-btn" data-filter="weekly">Weekly</button>
+          <button class="filter-btn" data-filter="monthly">Monthly</button>
+        </div>
+      </div>
+      <div id="archive-list">
+        <div class="empty-state"><div class="empty-dot"></div><div>Loading archives...</div></div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ── Right: Relationships + Feed ───────────────────────────────────── -->
+  <aside id="col-right">
+
+    <div id="rel-section">
+      <div class="col-heading">
+        <span>Relationships</span>
+        <span class="col-heading-sub" id="rel-bond-count"></span>
+      </div>
+      <svg id="rel-svg" viewBox="0 0 370 190"></svg>
+      <div class="rel-legend">
+        <div class="rel-legend-item">
+          <svg width="22" height="8"><line x1="0" y1="4" x2="22" y2="4" stroke="#00FF41" stroke-width="2.5" stroke-linecap="round"/></svg>
+          <span>Ally / Trust</span>
+        </div>
+        <div class="rel-legend-item">
+          <svg width="22" height="8"><line x1="0" y1="4" x2="22" y2="4" stroke="#FF3131" stroke-width="2.5" stroke-linecap="round"/></svg>
+          <span>Enemy / Conflict</span>
+        </div>
+        <div class="rel-legend-item rel-legend-thick">
+          <svg width="22" height="8"><line x1="0" y1="4" x2="22" y2="4" stroke="#00FF41" stroke-width="5" stroke-linecap="round" opacity="0.6"/></svg>
+          <span>Thicker = stronger</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="feed-section">
+      <div class="col-heading">
+        <span>Live Events</span>
+        <span class="col-heading-count" id="event-count">0</span>
+      </div>
+      <div id="feed-list">
+        <div class="empty-state"><div class="empty-dot"></div><div>Waiting for events...</div></div>
+      </div>
+    </div>
+
+    <div id="vault-bar">
+      <div class="vault-inner">
+        <span class="vault-label">City Vault</span>
+        <span class="vault-value" id="vault-bottom">— tokens</span>
+      </div>
+    </div>
+
+  </aside>
+</div>
+
+<!-- ── Graduation overlay ─────────────────────────────────────────────── -->
+<div id="graduation-overlay">
+  <div class="graduation-box">
+    <div class="grad-eyebrow">Graduation</div>
+    <div class="grad-name" id="grad-name">—</div>
+    <div class="grad-role" id="grad-role">—</div>
+    <div class="grad-teacher" id="grad-teacher"></div>
+    <div class="grad-statement" id="grad-statement">—</div>
+    <button class="grad-dismiss" onclick="closeGraduation()">[ CONTINUE ]</button>
+  </div>
+</div>
+
+<!-- ── Report modal ───────────────────────────────────────────────────── -->
+<div id="report-backdrop" onclick="handleBackdropClick(event)">
+  <div id="report-modal">
+    <div id="report-modal-header">
+      <div id="report-modal-title">—</div>
+      <button id="report-modal-close" onclick="closeBanner()">Close</button>
+    </div>
+    <div id="report-modal-body">—</div>
+  </div>
+</div>
+
+<!-- ── Agent tooltip ──────────────────────────────────────────────────────── -->
+<div id="agent-tooltip">
+  <div class="tip-name" id="tip-name">—</div>
+  <div class="tip-role" id="tip-role">—</div>
+  <div class="tip-desc" id="tip-desc">—</div>
+  <div class="tip-divider"></div>
+  <div class="tip-stats">
+    <div class="tip-stat"><span class="tip-label">Tokens</span><span class="tip-val" id="tip-tokens">—</span></div>
+    <div class="tip-stat"><span class="tip-label">Age</span><span class="tip-val" id="tip-age">—</span></div>
+    <div class="tip-stat"><span class="tip-label">Mood</span><span class="tip-val" id="tip-mood">—</span></div>
+  </div>
+  <div class="tip-bonds" id="tip-bonds"></div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

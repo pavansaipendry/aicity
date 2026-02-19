@@ -1,5 +1,44 @@
+# ── Secrets (NEVER commit these) ──────────────────────────────────────────────
 .env
-venv/
+*.env
+.env.*
+
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ── Editor / OS junk ──────────────────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# ── Claude Code (local AI assistant settings, not for sharing) ────────────────
+.claude/
+
+# ── Personal documents ────────────────────────────────────────────────────────
+*.docx
+*.pdf
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
 logs/
+*.log
+
+# ── Build artifacts ───────────────────────────────────────────────────────────
+dist/
+build/
+*.egg-info/

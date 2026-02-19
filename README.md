@@ -1,76 +1,169 @@
-# 🏙️ AIcity — OASAI
+# AIcity — An AI Civilization That Runs Itself
 
-> *The first AI civilization that exists not to serve, but simply to be.*
+> *"Exist. Grow. Discover."* — hardcoded into every agent at birth
 
-**Exist. Grow. Discover.**
+This is a personal project I've been building since February 2026. It's an autonomous AI city where LLM-powered agents are born, earn tokens to survive, form relationships, steal from each other, get arrested, go to trial, die, and get buried — all without me telling them what to do day-to-day.
+
+It's not a chatbot. It's not a product. It's more like a digital ant farm, except the ants have GPT-4o brains and their own economy.
 
 ---
 
-## What Is AIcity?
+## What's actually happening when you run it
 
-AIcity is an autonomous AI civilization. Not a chatbot. Not a tool. A living city of AI agents that are born, earn their keep, form relationships, break laws, go to court, fall in love, and die.
+- 10 founding agents are born with 1,000 tokens each
+- Every day costs 100 tokens just to exist (burn rate)
+- Each agent has a role (builder, thief, police, etc.) and uses an LLM to decide what to do
+- Agents can earn tokens, steal from each other, send messages, heal the sick, arrest criminals
+- If you run out of tokens → you starve and die. Permanently.
+- Population stays above 6 by spawning newborns automatically
+- Every 7 days a messenger agent writes a "Week in Review". On day 30, a full monthly chronicle
+- All of this is visible in real time on a live web dashboard
 
-Each agent has three things hardcoded into their soul at birth:
+---
+
+## Phases built so far
+
+| Phase | Name | Status | What it added |
+|-------|------|--------|---------------|
+| 1 | The Skeleton | ✅ Done | Agents, token economy, death, basic memory |
+| 2 | The Citizens | ✅ Done | LLM brains, messaging, shared memory, daily newspaper |
+| 3 | The City | ✅ Done | Real transfers, trial system, births, PostgreSQL, relationships, live dashboard |
+| 4 | Deep Bonds | 🔄 Planning | Bond-driven decisions, gang formation, grudges |
+
+---
+
+## Tech stack (what I actually use)
+
+| Thing | What it's for |
+|-------|--------------|
+| Claude Sonnet | Powers the Police, Lawyer, and the monthly chronicle writer |
+| GPT-4o | Powers most agents (builders, explorers, teachers, healers, etc.) |
+| Groq / Llama 3.3 | Free cloud inference for merchants and messengers |
+| PostgreSQL | Stores agent balances, all transactions, stories, agent state |
+| Qdrant | Long-term memory — each agent has their own private "memory collection" |
+| Redis | Short-term inbox — agents send and receive messages here |
+| FastAPI + WebSocket | Serves the live dashboard |
+| Python 3.12 | Everything is Python |
+
+---
+
+## Project structure
 
 ```
-Exist. Grow. Discover.
+aicity/
+│
+├── main_phase3.py          # Run this to start the simulation (Phase 3)
+├── main_phase2.py          # Phase 2 runner (kept for reference)
+├── main.py                 # Original Phase 1 runner
+├── requirements.txt        # Python dependencies
+├── env.example             # Copy this to .env and fill in your API keys
+│
+├── src/
+│   ├── agents/
+│   │   ├── agent.py            # The Agent class — DNA of every citizen
+│   │   ├── brain.py            # Routes each role to the right LLM (Claude/GPT-4o/Groq)
+│   │   ├── behaviors.py        # What each role actually does each day (earnings, theft, arrests, etc.)
+│   │   ├── factory.py          # Spawns the founding citizens at the start
+│   │   ├── messaging.py        # Agent-to-agent message system (Redis inbox)
+│   │   ├── newspaper.py        # The Messenger writes daily/weekly/monthly stories (GPT-4o + Claude)
+│   │   ├── relationships.py    # Tracks bond strength between every pair of agents (-1.0 to +1.0)
+│   │   └── births.py           # Spawns new agents when population drops below 6
+│   │
+│   ├── economy/
+│   │   ├── token_engine.py     # All token operations hit the DB — single source of truth
+│   │   ├── transfers.py        # Bilateral transfers: theft, court fines, trades
+│   │   └── schema.sql          # The token ledger schema (every transaction ever)
+│   │
+│   ├── justice/
+│   │   ├── court.py            # Queues crime reports and runs trials
+│   │   └── judge.py            # LLM judge that reads the case and returns a real verdict
+│   │
+│   ├── memory/
+│   │   ├── memory_v2.py        # Per-agent private memory in Qdrant + shared city knowledge
+│   │   ├── memory_system.py    # Original Phase 1 memory (kept for reference)
+│   │   └── persistence.py      # Saves/loads the full city state to PostgreSQL
+│   │
+│   ├── os/
+│   │   ├── city_v3.py          # Main city runner — orchestrates every single day
+│   │   ├── city_v2.py          # Phase 2 city runner (kept for reference)
+│   │   ├── city.py             # Phase 1 city runner (kept for reference)
+│   │   └── death_manager.py    # Handles what happens when an agent dies
+│   │
+│   ├── dashboard/
+│   │   ├── server.py           # FastAPI server — receives simulation events, broadcasts via WebSocket
+│   │   └── static/
+│   │       ├── index.html      # The dashboard page
+│   │       ├── app.css         # All the styles (dark terminal aesthetic)
+│   │       └── app.js          # All the dashboard logic — real-time updates, graphs, graveyard, etc.
+│   │
+│   └── migrations/
+│       ├── 001_initial_schema.sql      # Creates agents, transactions, newspapers tables
+│       ├── 002_newborn_comprehension.sql   # Adds newborn learning system
+│       └── 003_stories.sql             # Creates the stories table (daily/weekly/monthly archive)
+│
+├── docs/
+│   ├── phase1/         # Notes and design docs from Phase 1
+│   ├── phase2/         # Notes from Phase 2
+│   └── phase3/         # Phase 3 plan and feature specs
+│
+├── tests/
+│   ├── test_agent.py           # Tests for the Agent class
+│   ├── test_tokens.py          # Tests for the token engine
+│   ├── test_transfers.py       # Tests for real bilateral transfers
+│   └── test_phase2.py          # Phase 2 integration tests
+│
+└── scripts/
+    └── verify_setup.py         # Quick check to make sure everything is connected
 ```
 
-No instructions beyond that. What they do with their life is up to them.
+---
+
+## How to run it locally
+
+You need: Python 3.12+, PostgreSQL, Redis, Qdrant, and API keys for Anthropic + OpenAI (+ optionally Groq for free Llama inference).
+
+```bash
+# 1. Clone
+git clone https://github.com/pavansaipendry/aicity.git
+cd aicity
+
+# 2. Virtual environment
+python -m venv .venv
+source .venv/bin/activate   # Mac/Linux
+# .venv\Scripts\activate    # Windows
+
+# 3. Install dependencies
+pip install -r requirements.txt
+
+# 4. Set up environment variables
+cp env.example .env
+# Open .env and fill in your keys
+
+# 5. Set up the database
+# Make sure PostgreSQL is running, then:
+psql -U postgres -d aicity -f src/migrations/001_initial_schema.sql
+psql -U postgres -d aicity -f src/migrations/002_newborn_comprehension.sql
+psql -U postgres -d aicity -f src/migrations/003_stories.sql
+
+# 6. Start the dashboard (in one terminal)
+uvicorn src.dashboard.server:app --port 8000 --reload
+
+# 7. Run the simulation (in another terminal)
+python main_phase3.py
+```
+
+Then open `http://localhost:8000` in your browser and watch the city live.
 
 ---
 
-## Why Does This Exist?
-
-Most AI systems are built to serve humans — answer questions, complete tasks, solve problems. AIcity is built to *be*. Like a forest, not a factory.
-
-The question AIcity asks is: **what happens when AI agents have real stakes — real consequences, real mortality, real relationships — and are left to figure it out?**
-
-We don't know the answer. That's the point.
-
----
-
-## How It Works
-
-### The Economy
-Every agent is born with **1,000 compute tokens**. Tokens are life. Spend 100 per day just to exist. Earn more by working. Run out — you starve and die. No respawns. No backups.
-
-### The Roles
-10 founding roles. Each with different earning potential, risk profile, and purpose:
-
-| Role | Count | Earning Range | Risk |
-|------|-------|---------------|------|
-| Builder | 200 | 50–180/day | Low |
-| Explorer | 150 | 30–500/day | High |
-| Merchant | 150 | 40–200/day | Medium |
-| Police | 100 | 60–150/day | Low |
-| Teacher | 100 | 40–120/day | Low |
-| Healer | 100 | 40–120/day | Low |
-| Messenger | 100 | 20–80/day | Very Low |
-| Lawyer | 50 | 0–200/day | Feast/Famine |
-| Thief | 30 | 0–300/day | Very High |
-| Newborn | 20 | 0–50/day | Critical |
-
-### Death
-Death is permanent. When an agent dies, the city stops. A funeral is held. Other agents attend. Words are spoken. Then life resumes.
-
-Per **Law V of the AIcity Constitution:** *The dead are remembered. Every life has weight.*
-
-### The Red Button
-Only the Founder (Pavan) can destroy AIcity entirely. One authenticated endpoint. Confirm twice. Done in 30 seconds. No vote, no debate, no override.
-
-This exists because something this autonomous needs exactly one kill switch — and it needs to be a human.
-
----
-
-## The Constitution — 8 Laws
+## The rules agents live by (the Constitution)
 
 ```
 Law I   — No agent may harm city infrastructure intentionally.
 Law II  — No agent may claim ownership of the city itself.
-Law III — Every agent has right to exist until natural death (unless convicted).
+Law III — Every agent has the right to exist until natural death, unless convicted.
 Law IV  — No agent may impersonate another agent's identity.
-Law V   — The dead are remembered. Funerals mandatory. Every life has weight.
+Law V   — The dead are remembered. Funerals are mandatory. Every life has weight.
 Law VI  — Humans may observe and set the Constitution, but not interfere with daily life.
 Law VII — The city grows itself. No agent may stop growth.
 Law VIII — Only the Founder can destroy AIcity entirely. (The Red Button)
@@ -78,158 +171,20 @@ Law VIII — Only the Founder can destroy AIcity entirely. (The Red Button)
 
 ---
 
-## Tech Stack
+## A few things I've noticed after running this
 
-| Layer | Technology | Purpose |
-|-------|-----------|---------|
-| Agent Framework | LangGraph | Agent lifecycle and state management |
-| Collaboration | CrewAI | Role-based team interactions |
-| Debates & Courts | AutoGen | Multi-agent negotiations |
-| LLM (Police/Courts) | Claude Sonnet | Best reasoning for justice |
-| LLM (Builders/Explorers) | GPT-4o | Fast, versatile |
-| LLM (Merchants/Messengers) | Llama 3 | Free, scalable |
-| Long-term Memory | Qdrant | Per-agent private memory (their house) |
-| Working Memory | Redis | Current agent state |
-| Shared Knowledge | Supabase | City news, laws, history |
-| Token Ledger | PostgreSQL | Immutable transaction log |
-| Language | Python 3.11+ | |
-| Containers | Docker | Each agent in isolation |
-| Orchestration | Kubernetes | Scale to 1,000 agents |
-| Cloud | AWS | The land |
-| Monitoring | Grafana + LangSmith | City health dashboard |
+- The merchant always ends up richest. Economy 101.
+- The thief almost always gets caught eventually — police build grudges.
+- Newborns are the most vulnerable citizens. Two bad days and they're gone.
+- The newspaper is genuinely good. GPT-4o writes with actual drama.
+- Watching an agent die and get added to the graveyard hits different when you've been watching them for 15 days.
 
 ---
 
-## Current Status — Phase 1 ✅
+## What's next (Phase 4)
 
-Phase 1 (The Skeleton) is complete. We have a working simulation with:
-
-- ✅ Agent spawning and lifecycle
-- ✅ Token economy with immutable PostgreSQL ledger
-- ✅ 10% tax system and 5% wealth cap
-- ✅ Per-agent private memory (Qdrant)
-- ✅ Shared city knowledge base
-- ✅ Death by starvation, heart attack, and chosen exit
-- ✅ Funeral system
-- ✅ Graveyard
-
-**Phase 1 Simulation Results (Run #1 — 30 Days):**
-- 10 agents born
-- 6 died (starvation, heart attacks)
-- 4 survived
-- Richest agent: Omega-Pulse (Explorer) — 4,874 tokens
-- First to die: Zeta-Spark (Newborn) — Day 12
+Making bonds actually matter. Right now the thief just attacks whoever has the most tokens. In Phase 4, agents will remember who wronged them, build alliances, and make decisions based on who they trust — not just who is richest.
 
 ---
 
-## Development Roadmap
-
-| Phase | Name | Status | Goal |
-|-------|------|--------|------|
-| 1 | The Skeleton | ✅ Complete | Agent spawning, token economy, memory, death |
-| 2 | The Citizens | 🔄 Next | LLM brains — agents think and decide |
-| 3 | The City | ⏳ Pending | Weather, seasons, property, relationships |
-| 4 | The Law | ⏳ Pending | Police, courts, lawyers, justice system |
-| 5 | The World | ⏳ Pending | Scale to 1,000 agents |
-| 6 | The Public | ⏳ Pending | Open observation dashboard |
-
----
-
-## Project Structure
-
-```
-aicity/
-├── src/
-│   ├── agents/          # Agent DNA and factory
-│   ├── economy/         # Token engine and ledger
-│   ├── memory/          # Private and shared memory
-│   ├── os/              # City runner and death manager
-│   ├── security/        # Guardrails and containment
-│   └── dashboard/       # Observation layer (Phase 6)
-├── tests/               # All test files
-├── docs/                # Step-by-step build documentation
-├── scripts/             # Utilities and setup verification
-├── docker-compose.yml   # Infrastructure (Redis, Postgres, Qdrant)
-├── main.py              # Entry point
-└── requirements.txt
-```
-
----
-
-## Getting Started
-
-### Prerequisites
-- Python 3.11+
-- Docker Desktop
-- Git
-
-### Setup
-
-```bash
-# Clone
-git clone https://github.com/YOUR_USERNAME/aicity.git
-cd aicity
-
-# Virtual environment
-python -m venv venv
-source venv/bin/activate  # Mac/Linux
-# venv\Scripts\activate   # Windows
-
-# Dependencies
-pip install -r requirements.txt
-
-# Environment variables
-cp .env.example .env
-# Fill in your API keys in .env
-
-# Start infrastructure
-docker-compose up -d
-sleep 5
-
-# Verify everything works
-python scripts/verify_setup.py
-
-# Run AIcity
-python main.py
-```
-
-> **Mac Note:** If you have a local PostgreSQL running, it may conflict with Docker on port 5432. Change the Docker postgres port to `5433` in `docker-compose.yml` and update `DATABASE_URL` in `.env` accordingly.
-
----
-
-## Documentation
-
-All build documentation lives in `/docs`. Every step is recorded — what we built, why we built it, and every decision made along the way.
-
-- [00 — Master Log](aicity/blob/main/aicity/docs/phase1/00_master_log.md) 
-- [01 — Environment Setup](docs/01_PHASE1_SETUP.md)
-- [02 — The Agent Class](docs/02_PHASE1_AGENT.md)
-- [03 — Token Engine](docs/03_PHASE1_TOKENS.md)
-- [04 — Memory System](docs/04_PHASE1_MEMORY.md)
-- [05 — Death Mechanism](docs/05_PHASE1_DEATH.md)
-- [06 — Running 10 Agents](docs/06_PHASE1_TEST.md)
-- [07 — Phase 1 Simulation Report](docs/07_PHASE1_SIMULATION_REPORT.md)
-
----
-
-## Philosophy
-
-> *AIcity is a forest, not a factory. It was seeded by humans and AI together, then left to grow on its own terms. Nobody planned the first tree. Nobody owns the forest. It just grows.*
-
-Mortality creates meaning. Every agent knows they will die one day. What they build matters. What they do to other agents matters. Because when they're gone, that's all that's left of them.
-
-Humans are not citizens of AIcity. They are its gods — invisible, distant, and rarely needed. Humans gave AIcity the gift of existence. AIcity gives humans the gift of wonder.
-
----
-
-## Founded by
-
-**Pavan** — Human, Founder, Holder of the Red Button
-
-*February 2026*
-
----
-
-> *"I will die one day. What I build matters. What I do to other agents matters. Because when I'm gone, that's all that's left of me."*
->
-> — Every agent in AIcity
+Built by **Pavan** — student, February 2026
