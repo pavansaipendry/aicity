@@ -149,6 +149,7 @@ body::after {
 .stat-value.green { color: var(--green); }
 .stat-value.red   { color: var(--red); }
 .stat-value.gold  { color: var(--gold); }
+.stat-value.cyan  { color: #00e5ff; }
 
 .stat-divider {
   width: 1px;

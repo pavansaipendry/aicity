@@ -319,6 +319,14 @@ function updateCounters() {
   document.getElementById('alive-counter').textContent  = alive.length || '—';
   document.getElementById('death-counter').textContent  = dead.length  || '—';
   document.getElementById('citizen-count').textContent  = alive.length;
+
+  // API cost counters
+  if (state.api_cost_today !== undefined) {
+    document.getElementById('api-cost-today').textContent = '$' + state.api_cost_today.toFixed(4);
+  }
+  if (state.api_cost_total !== undefined) {
+    document.getElementById('api-cost-total').textContent = '$' + state.api_cost_total.toFixed(4);
+  }
 }
 
 function isAlive(a) {

@@ -22,6 +22,50 @@ from anthropic import Anthropic
 from openai import OpenAI
 
 
+# ─── Token cost tracker ─────────────────────────────────────────────────────
+# Tracks API token usage across every LLM call in the simulation.
+# city_v3.py reads this at the end of each day and resets it.
+
+_COST_PER_MTOK = {
+    # (input $/MTok, output $/MTok)
+    "claude":  (3.00, 15.00),   # Claude Sonnet 4.6
+    "gpt4o":   (2.50, 10.00),   # GPT-4o
+    "llama":   (0.00,  0.00),   # Groq free tier
+}
+
+class _UsageTracker:
+    def __init__(self):
+        self._day_input:  dict[str, int] = {}   # model → tokens
+        self._day_output: dict[str, int] = {}
+        self._total_usd: float = 0.0
+        self._day_usd:   float = 0.0
+
+    def add(self, model_type: str, input_tok: int, output_tok: int):
+        self._day_input[model_type]  = self._day_input.get(model_type, 0)  + input_tok
+        self._day_output[model_type] = self._day_output.get(model_type, 0) + output_tok
+        in_rate, out_rate = _COST_PER_MTOK.get(model_type, (0, 0))
+        cost = (input_tok * in_rate + output_tok * out_rate) / 1_000_000
+        self._day_usd   += cost
+        self._total_usd += cost
+
+    def day_summary(self) -> dict:
+        return {
+            "day_usd":   round(self._day_usd, 5),
+            "total_usd": round(self._total_usd, 5),
+            "day_tokens": {
+                m: self._day_input.get(m, 0) + self._day_output.get(m, 0)
+                for m in set(list(self._day_input) + list(self._day_output))
+            }
+        }
+
+    def reset_day(self):
+        self._day_input.clear()
+        self._day_output.clear()
+        self._day_usd = 0.0
+
+usage_tracker = _UsageTracker()
+
+
 # ─── LLM clients ────────────────────────────────────────────────────────────
 
 anthropic_client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -407,6 +451,8 @@ Respond with a JSON object only — no extra text:
                     {"role": "user", "content": prompt.strip()}
                 ]
             )
+            if response.usage:
+                usage_tracker.add("gpt4o", response.usage.prompt_tokens, response.usage.completion_tokens)
             result = self._parse_response(response.choices[0].message.content)
 
             # Validate the chosen role
@@ -547,6 +593,7 @@ Respond with a JSON object only — no extra text:
             system=self.system_prompt,
             messages=[{"role": "user", "content": prompt}]
         )
+        usage_tracker.add("claude", response.usage.input_tokens, response.usage.output_tokens)
         return self._parse_response(response.content[0].text)
 
     def _think_gpt4o(self, prompt: str) -> dict:
@@ -558,6 +605,8 @@ Respond with a JSON object only — no extra text:
                 {"role": "user", "content": prompt}
             ]
         )
+        if response.usage:
+            usage_tracker.add("gpt4o", response.usage.prompt_tokens, response.usage.completion_tokens)
         return self._parse_response(response.choices[0].message.content)
 
     def _think_llama(self, prompt: str) -> dict:
@@ -574,6 +623,8 @@ Respond with a JSON object only — no extra text:
                     {"role": "user", "content": prompt},
                 ],
             )
+            if response.usage:
+                usage_tracker.add("llama", response.usage.prompt_tokens, response.usage.completion_tokens)
             return self._parse_response(response.choices[0].message.content)
         except Exception as e:
             logger.warning(f"⚡ Groq error ({e}). Falling back to GPT-4o for {self.name}.")
@@ -630,6 +681,7 @@ No quotes, no JSON. Just the sentence.
                     system=self.system_prompt,
                     messages=[{"role": "user", "content": prompt}]
                 )
+                usage_tracker.add("claude", response.usage.input_tokens, response.usage.output_tokens)
                 return response.content[0].text.strip()
             else:
                 response = openai_client.chat.completions.create(
@@ -640,6 +692,8 @@ No quotes, no JSON. Just the sentence.
                         {"role": "user", "content": prompt}
                     ]
                 )
+                if response.usage:
+                    usage_tracker.add("gpt4o", response.usage.prompt_tokens, response.usage.completion_tokens)
                 return response.choices[0].message.content.strip()
         except Exception:
             return f"Day {day_summary[:50]}... just another day in AIcity."

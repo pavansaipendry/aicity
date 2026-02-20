@@ -24,7 +24,7 @@ from rich.panel import Panel
 
 from src.agents.agent import Agent, AgentRole, AgentStatus
 from src.agents.factory import spawn_founding_citizens
-from src.agents.brain import AgentBrain
+from src.agents.brain import AgentBrain, usage_tracker
 from src.agents.behaviors import execute_action
 from src.agents.messaging import get_inbox, format_inbox_for_brain, clear_inbox
 from src.agents.newspaper import CityNewspaper
@@ -483,6 +483,8 @@ class AICity:
         ]})
 
         # 8. Dashboard state update — always broadcast so refresh shows current state
+        _cost = usage_tracker.day_summary()
+        usage_tracker.reset_day()
         _broadcast_sync({
             "type": "state",
             "data": {
@@ -495,6 +497,8 @@ class AICity:
                     for k, v in self.relationships._bonds.items()
                     if abs(v) > 0.12
                 ],
+                "api_cost_today": _cost["day_usd"],
+                "api_cost_total": _cost["total_usd"],
             }
         })
 

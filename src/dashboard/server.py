@@ -34,6 +34,8 @@ city_state: dict = {
     "events": [],        # last 150 live feed events — survive page refresh
     "messages": [],      # last 150 dispatches — survive page refresh
     "relationships": [], # current agent bond pairs
+    "api_cost_today": 0.0,
+    "api_cost_total": 0.0,
 }
 
 MAX_EVENTS = 150
