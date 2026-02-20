@@ -75,6 +75,18 @@ export interface TilePlacedEvent {
   day:      number;
 }
 
+/**
+ * A tile_removed WS event — fired when a tile is deleted from the world
+ * (e.g. a builder clears a tree before laying a road).
+ */
+export interface TileRemovedEvent {
+  type:  "tile_removed";
+  col:   number;
+  row:   number;
+  layer: number;
+  day:   number;
+}
+
 /** Construction progress WS event. */
 export interface ConstructionProgressEvent {
   type:     "construction_progress";
@@ -120,6 +132,7 @@ export interface WorldState {
 export type WSEvent =
   | { type: "state";                 data: WorldState }
   | TilePlacedEvent
+  | TileRemovedEvent
   | ConstructionProgressEvent
   | AgentStateEvent
   | PositionsEvent

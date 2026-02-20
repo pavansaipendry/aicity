@@ -76,21 +76,19 @@ def _infer_action(action_text: str) -> str:
     return "idle"
 
 
-def _maybe_place_tile(agent, day: int) -> dict | None:
+def _maybe_place_tile(agent, day: int) -> list[dict]:
     """
     Phase 6: let builders and explorers leave marks on the world.
 
-    Builder  → places a road segment near their position (35 % chance/turn).
-    Explorer → places a tree near their position (20 % chance/turn).
+    Builder  → clears any tree on the target cell, then places a road segment
+               (35 % chance/turn). Clearing trees first makes roads visible.
+    Explorer → places a tree one step away from the agent (20 % chance/turn).
 
-    Coordinates: agent.x/y live in the 96×72 Phase-5 space.
-    We convert to the 64×64 iso grid the same way scaleToGrid() does on the
-    TypeScript side:  col = round(x * 63/96),  row = round(y * 63/72).
-    A random ±1 jitter prevents every tile stacking on the exact same cell.
+    Returns a list of events to broadcast (may be empty on no-op or error).
     """
     role = getattr(agent, "role", None)
     if role not in ("builder", "explorer"):
-        return None
+        return []
 
     x = getattr(agent, "x", 48.0)
     y = getattr(agent, "y", 36.0)
@@ -99,21 +97,34 @@ def _maybe_place_tile(agent, day: int) -> dict | None:
     col = max(0, min(63, col))
     row = max(0, min(63, row))
 
+    events: list[dict] = []
     try:
         if role == "builder" and random.random() < 0.35:
-            return _tile_manager.place_tile(
+            # Remove any nature tile (tree/rock) so the road is visible
+            removed = _tile_manager.remove_tile(col, row, layer=2)
+            if removed:
+                events.append({"type": "tile_removed", "col": col, "row": row,
+                                "layer": 2, "day": day})
+            road = _tile_manager.place_tile(
                 col, row, "road_ns", layer=1,
                 built_by=agent.name, built_day=day,
             )
-        if role == "explorer" and random.random() < 0.20:
+            events.append({"type": "tile_placed", "tile": road, "day": day})
+
+        elif role == "explorer" and random.random() < 0.20:
+            # Offset by 2 tiles so it looks like the explorer found new terrain
+            ec = max(0, min(63, col + random.randint(-2, 2)))
+            er = max(0, min(63, row + random.randint(-2, 2)))
             tree = random.choice(["tree_pine", "tree_oak"])
-            return _tile_manager.place_tile(
-                col, row, tree, layer=2,
+            tile = _tile_manager.place_tile(
+                ec, er, tree, layer=2,
                 built_by=agent.name, built_day=day,
             )
+            events.append({"type": "tile_placed", "tile": tile, "day": day})
+
     except Exception as _e:
         logger.warning(f"[tile] placement failed for {agent.name}: {_e}")
-    return None
+    return events
 
 
 death_manager = DeathManager(memory_system=None, token_engine=token_engine)
@@ -732,9 +743,8 @@ class AICity:
         })
 
         # Phase 6: builder/explorer → world tile placement
-        placed = _maybe_place_tile(agent, self.day)
-        if placed:
-            _broadcast_sync({"type": "tile_placed", "tile": placed, "day": self.day})
+        for _tile_event in _maybe_place_tile(agent, self.day):
+            _broadcast_sync(_tile_event)
 
 
     def _messenger_writes(self, persistence=None):

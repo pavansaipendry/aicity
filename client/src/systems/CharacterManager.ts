@@ -196,8 +196,9 @@ export class CharacterManager {
       entry.col, entry.row, toCol, toRow,
       (path) => {
         if (!path || path.length === 0) {
-          // No path — teleport directly (shouldn't happen often)
-          this._teleport(name, toCol, toRow);
+          // No path to destination (e.g. target is water or a tree).
+          // Stay at current position rather than warping onto a blocked tile.
+          entry.action = "idle";
           return;
         }
         this._walkPath(name, path);
@@ -236,17 +237,6 @@ export class CharacterManager {
         }
       },
     });
-  }
-
-  private _teleport(name: string, col: number, row: number): void {
-    const entry = this._agents.get(name);
-    if (!entry) return;
-    const { x, y } = tileToWorld(col, row);
-    entry.container.x = x;
-    entry.container.y = y;
-    entry.container.zIndex = depthOrder(col, row, 4);
-    entry.col = col;
-    entry.row = row;
   }
 
   // ── Private: rendering ─────────────────────────────────────────────────────

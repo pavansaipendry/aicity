@@ -38,12 +38,12 @@ const TILE_COLOURS: Record<string, number> = {
   dirt:        0x8b6914,
   sand:        0xd4b896,
 
-  // Road layer (layer 1) — all variants share the same palette
-  road_ns:     0x555566,
-  road_ew:     0x555566,
-  road_cross:  0x666677,
-  road_corner: 0x555566,
-  road:        0x555566,   // generic fallback before resolution
+  // Road layer (layer 1) — warm sandy tan, clearly contrasts against grass
+  road_ns:     0xC8A86E,
+  road_ew:     0xC8A86E,
+  road_cross:  0xD4B87A,   // slightly brighter at intersections
+  road_corner: 0xC8A86E,
+  road:        0xC8A86E,   // generic fallback before resolution
 
   // Nature layer (layer 2)
   tree_pine:   0x2d6a2d,

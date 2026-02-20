@@ -13,7 +13,7 @@
  */
 
 import {
-  WSEvent, TilePlacedEvent, ConstructionProgressEvent,
+  WSEvent, TilePlacedEvent, TileRemovedEvent, ConstructionProgressEvent,
   AgentStateEvent, PositionsEvent, Agent,
 } from "@/types";
 import { IsoWorld }         from "@/engine/IsoWorld";
@@ -54,6 +54,10 @@ export class EventHandler {
 
       case "tile_placed":
         this._onTilePlaced(event as TilePlacedEvent);
+        break;
+
+      case "tile_removed":
+        this._onTileRemoved(event as TileRemovedEvent);
         break;
 
       case "construction_progress":
@@ -108,6 +112,20 @@ export class EventHandler {
     this._world.setTile(event.tile);
     // Update pathfinder walkability grid so agents route around new obstacles
     this._pathFinder.updateTile(event.tile);
+  }
+
+  private _onTileRemoved(event: TileRemovedEvent): void {
+    // Remove tile from renderer (cell reverts to grass underneath)
+    this._world.removeTile(event.col, event.row, event.layer);
+    // Mark cell as walkable again in the pathfinder
+    this._pathFinder.updateTile({
+      col:       event.col,
+      row:       event.row,
+      tile_type: "grass",   // grass = walkable
+      layer:     event.layer,
+      built_by:  null,
+      built_day: null,
+    });
   }
 
   private _onConstructionProgress(event: ConstructionProgressEvent): void {

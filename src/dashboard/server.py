@@ -192,13 +192,13 @@ async def receive_event(request: Request):
 
     # Phase 6: tile changes — just broadcast, no state caching needed
     # (frontend fetches /api/world once on load, then applies incremental updates)
-    elif event_type in ("tile_placed", "construction_progress", "construction_complete"):
+    elif event_type in ("tile_placed", "tile_removed", "construction_progress", "construction_complete"):
         pass  # broadcast handles it below
 
     # ── Persist feed events so they survive a page refresh ──────────────────
     # Phase 5: skip high-frequency position/phase events from feed storage
     _SKIP_FEED = {"state", "agent_update", "positions", "time_phase",
-                  "tile_placed", "construction_progress"}
+                  "tile_placed", "tile_removed", "construction_progress"}
     if event_type not in _SKIP_FEED:
         entry = {**event, "day": event.get("day") or city_state.get("day", 0)}
         events = city_state.setdefault("events", [])
