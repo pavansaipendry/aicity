@@ -43,6 +43,7 @@ from src.economy.assets import AssetSystem
 from src.city.position_manager import PositionManager
 from src.city.home_manager import HomeManager
 from src.city.meeting_manager import MeetingManager
+from src.world import tile_manager as _tile_manager
 
 # Dashboard import — optional, won't crash if not running
 try:
@@ -73,6 +74,48 @@ def _infer_action(action_text: str) -> str:
     if any(w in t for w in ("walk", "travel", "move", "patrol", "explore", "visit", "go to")):
         return "walking"
     return "idle"
+
+
+def _maybe_place_tile(agent, day: int) -> dict | None:
+    """
+    Phase 6: let builders and explorers leave marks on the world.
+
+    Builder  → places a road segment near their position (35 % chance/turn).
+    Explorer → places a tree near their position (20 % chance/turn).
+
+    Coordinates: agent.x/y live in the 96×72 Phase-5 space.
+    We convert to the 64×64 iso grid the same way scaleToGrid() does on the
+    TypeScript side:  col = round(x * 63/96),  row = round(y * 63/72).
+    A random ±1 jitter prevents every tile stacking on the exact same cell.
+    """
+    role = getattr(agent, "role", None)
+    if role not in ("builder", "explorer"):
+        return None
+
+    x = getattr(agent, "x", 48.0)
+    y = getattr(agent, "y", 36.0)
+    col = round(x * 63 / 96) + random.randint(-1, 1)
+    row = round(y * 63 / 72) + random.randint(-1, 1)
+    col = max(0, min(63, col))
+    row = max(0, min(63, row))
+
+    try:
+        if role == "builder" and random.random() < 0.35:
+            return _tile_manager.place_tile(
+                col, row, "road_ns", layer=1,
+                built_by=agent.name, built_day=day,
+            )
+        if role == "explorer" and random.random() < 0.20:
+            tree = random.choice(["tree_pine", "tree_oak"])
+            return _tile_manager.place_tile(
+                col, row, tree, layer=2,
+                built_by=agent.name, built_day=day,
+            )
+    except Exception as _e:
+        logger.warning(f"[tile] placement failed for {agent.name}: {_e}")
+    return None
+
+
 death_manager = DeathManager(memory_system=None, token_engine=token_engine)
 city_knowledge = CityKnowledge()
 newspaper = CityNewspaper()
@@ -687,6 +730,11 @@ class AICity:
             "facing": "south",
             "day":    self.day,
         })
+
+        # Phase 6: builder/explorer → world tile placement
+        placed = _maybe_place_tile(agent, self.day)
+        if placed:
+            _broadcast_sync({"type": "tile_placed", "tile": placed, "day": self.day})
 
 
     def _messenger_writes(self, persistence=None):

@@ -6,6 +6,10 @@
  *   1. Add it to WSEvent union in types.ts
  *   2. Add a case in handle() below
  *   3. Write the handler method
+ *
+ * Sprint 3 addition: PathFinder is now injected so that tile_placed events
+ * update the walkability grid in real time — agents route around new roads
+ * and trees immediately after they're placed.
  */
 
 import {
@@ -14,6 +18,7 @@ import {
 } from "@/types";
 import { IsoWorld }         from "@/engine/IsoWorld";
 import { CharacterManager } from "./CharacterManager";
+import { PathFinder }       from "./PathFinder";
 
 export interface UICallbacks {
   onState?:         (data: WSEvent & { type: "state" }) => void;
@@ -23,14 +28,21 @@ export interface UICallbacks {
 }
 
 export class EventHandler {
-  private _world:     IsoWorld;
-  private _chars:     CharacterManager;
-  private _callbacks: UICallbacks;
+  private _world:      IsoWorld;
+  private _chars:      CharacterManager;
+  private _pathFinder: PathFinder;
+  private _callbacks:  UICallbacks;
 
-  constructor(world: IsoWorld, chars: CharacterManager, callbacks: UICallbacks = {}) {
-    this._world     = world;
-    this._chars     = chars;
-    this._callbacks = callbacks;
+  constructor(
+    world:       IsoWorld,
+    chars:       CharacterManager,
+    pathFinder:  PathFinder,
+    callbacks:   UICallbacks = {},
+  ) {
+    this._world      = world;
+    this._chars      = chars;
+    this._pathFinder = pathFinder;
+    this._callbacks  = callbacks;
   }
 
   handle(event: WSEvent): void {
@@ -92,32 +104,39 @@ export class EventHandler {
   }
 
   private _onTilePlaced(event: TilePlacedEvent): void {
+    // Update renderer — road auto-connect is handled inside IsoWorld.setTile()
     this._world.setTile(event.tile);
+    // Update pathfinder walkability grid so agents route around new obstacles
+    this._pathFinder.updateTile(event.tile);
   }
 
   private _onConstructionProgress(event: ConstructionProgressEvent): void {
     const { project } = event;
-    this._world.setTile({
+    const tile = {
       col:       project.target_col,
       row:       project.target_row,
       tile_type: `construction_${project.stage}`,
       layer:     3,
       built_by:  project.builders[0] ?? null,
       built_day: event.day,
-    });
+    };
+    this._world.setTile(tile);
+    this._pathFinder.updateTile(tile);
   }
 
   private _onConstructionComplete(event: WSEvent & { type: "construction_complete" }): void {
     const project = (event as unknown as ConstructionProgressEvent).project;
     if (project) {
-      this._world.setTile({
+      const tile = {
         col:       project.target_col,
         row:       project.target_row,
         tile_type: project.tile_type,
         layer:     3,
         built_by:  project.builders[0] ?? null,
         built_day: event.day as number,
-      });
+      };
+      this._world.setTile(tile);
+      this._pathFinder.updateTile(tile);
     }
     this._callbacks.onBuildComplete?.(project?.name ?? "building", event.day as number);
   }

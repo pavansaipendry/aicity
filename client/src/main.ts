@@ -64,7 +64,7 @@ async function boot(): Promise<void> {
   const wsUrl      = `${wsProtocol}://${window.location.host}/ws`;
 
   const socket  = new WorldSocket(wsUrl);
-  const handler = new EventHandler(world, chars, {
+  const handler = new EventHandler(world, chars, pathFinder, {
     onState: (event) => {
       const data = event.data as { day: number; agents: unknown[] };
       console.log(`[state] Day ${data.day}, agents: ${data.agents.length}`);
