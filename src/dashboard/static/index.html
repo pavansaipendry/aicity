@@ -7,6 +7,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=VT323&family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/app.css">
+  <!-- Phaser 3 — loaded before game scripts -->
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
 </head>
 <body>
 
@@ -88,11 +90,17 @@
     </section>
 
     <div class="center-tab-bar">
+      <button class="tab-btn" data-tab="city">City</button>
       <button class="tab-btn active" data-tab="newspaper">Daily</button>
       <button class="tab-btn" data-tab="economy">Economy</button>
       <button class="tab-btn" data-tab="dispatches">Dispatches <span class="tab-badge" id="tab-badge-dispatches"></span></button>
       <button class="tab-btn" data-tab="archives">Archives</button>
     </div>
+
+    <!-- ── City tab: Phaser canvas lives here ──────────────────────────── -->
+    <section class="tab-panel" id="tab-city">
+      <div id="game-canvas"></div>
+    </section>
 
     <section class="tab-panel active" id="tab-newspaper">
       <div class="panel-heading">
@@ -216,5 +224,15 @@
 </div>
 
 <script src="/static/app.js"></script>
+
+<!-- ── AIcity Game (Phase 5) ──────────────────────────────────────────── -->
+<!-- Data files must load before scenes -->
+<script src="/static/game/data/zones.js"></script>
+<script src="/static/game/data/roleConfig.js"></script>
+<!-- Scenes -->
+<script src="/static/game/scenes/BootScene.js"></script>
+<script src="/static/game/scenes/CityScene.js"></script>
+<!-- Boot -->
+<script src="/static/game/main.js"></script>
 </body>
 </html>

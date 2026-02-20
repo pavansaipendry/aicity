@@ -40,4 +40,4 @@ if __name__ == "__main__":
         city.big_bang(n=10)
         print("🌌 New city created — Day 1")
 
-    city.run(days=30, speed=120, persistence=persistence)
+    city.run(days=30, speed=30, persistence=persistence)

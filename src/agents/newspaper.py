@@ -63,18 +63,31 @@ class CityNewspaper:
 
     # ─── Daily ────────────────────────────────────────────────────────────────
 
-    def write(self, day: int, events: list[dict], messenger_name: str = "The Messenger") -> str:
+    def write(
+        self,
+        day: int,
+        events: list[dict],
+        messenger_name: str = "The Messenger",
+        archive_active: bool = False,
+    ) -> str:
         """
         Write the daily newspaper. Called every morning before agents act.
+        archive_active: when True (City Archive asset exists), prompt for richer, more structured reporting.
         """
         if not events:
             return self._quiet_day(day, messenger_name)
 
         events_text = self._format_events(events)
+        archive_note = (
+            "\nThe City Archive is active. Write with more historical precision — "
+            "cite specific agent names, exact token amounts, and day references. "
+            "The archive will preserve this edition for future generations.\n"
+            if archive_active else ""
+        )
         prompt = f"""
             AIcity Daily — Day {day}
             Written by: {messenger_name}
-
+            {archive_note}
             Yesterday's Events:
             {events_text}
 

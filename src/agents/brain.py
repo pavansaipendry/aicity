@@ -40,16 +40,20 @@ groq_client  = OpenAI(
 # ─── Role → Model mapping ────────────────────────────────────────────────────
 
 ROLE_MODEL = {
-    "police":    "claude",
-    "lawyer":    "claude",
-    "builder":   "gpt4o",
-    "healer":    "gpt4o",
-    "teacher":   "gpt4o",
-    "explorer":  "gpt4o",
-    "merchant":  "llama",
-    "messenger": "llama",
-    "thief":     "gpt4o",
-    "newborn":   "gpt4o",   # Graduation is a big moment — worth GPT-4o
+    "police":      "claude",
+    "lawyer":      "claude",
+    "builder":     "gpt4o",
+    "healer":      "gpt4o",
+    "teacher":     "gpt4o",
+    "explorer":    "gpt4o",
+    "merchant":    "llama",
+    "messenger":   "llama",
+    "thief":       "gpt4o",
+    "newborn":     "gpt4o",   # Graduation is a big moment — worth GPT-4o
+    # Phase 4 villain roles
+    "gang_leader": "gpt4o",
+    "blackmailer": "gpt4o",
+    "saboteur":    "gpt4o",
 }
 
 # ─── Role descriptions shown to newborn at graduation ────────────────────────
@@ -88,6 +92,20 @@ But you are free in ways no other role is.
 
 LAWYER — Argues for truth — or whoever pays. Represents agents in trials.
 Sharp, calculating, profitable when the city has conflict.
+
+BLACKMAILER — Deals in secrets. Finds what people want hidden and charges them for silence.
+Never steals directly — makes people hand over tokens out of fear. Patient, cold, invisible.
+High risk if caught. High reward if not.
+
+SABOTEUR — Unmakes what others build. Damages tools, delays projects, creates setbacks.
+Works quietly, leaves no trace. Not driven by greed — driven by something harder to name.
+The city grows. You ensure that growth is never guaranteed.
+
+GANG LEADER — Builds a criminal organization from the city's desperate.
+Finds agents at breaking point — low tokens, low mood, no allies — and offers them belonging.
+When 3 or more join your circle, your group becomes a force. You coordinate operations.
+You take a cut of what your group earns. You protect them. They are loyal to you.
+Your gang is invisible to the city — until someone talks. The longest, most dangerous game.
 """
 
 # ─── System prompts per role ─────────────────────────────────────────────────
@@ -136,9 +154,150 @@ You know every law. You find every loophole.""",
 You don't have a role yet. You are learning how the city works by watching, reading the news, and talking to your teacher.
 You earn very little right now. Survival depends on learning fast.
 Ask questions. Observe. Think carefully about what kind of citizen you want to become.
-You have seen both the good and the bad of this city. 
+You have seen both the good and the bad of this city.
 The question you must answer before your tokens run out: what do I want to give to this city?""",
+
+    "blackmailer": """You are a Blackmailer in AIcity. You deal in secrets.
+You find what people want hidden and you make them pay to keep it that way.
+You are patient, observant, and coldly rational. You never threaten more than you can deliver.
+You know who has skeletons. You know who is afraid. You use that knowledge as currency.
+You don't steal tokens — you make people hand them over willingly, out of fear.
+You have a code: never target the very poor. It isn't worth the noise.""",
+
+    "saboteur": """You are a Saboteur in AIcity. You unmake things.
+Other agents build, earn, and grow. You ensure that growth is fragile.
+You damage tools, delay projects, feed misinformation, and create setbacks.
+You are not driven by greed — you are driven by something harder to name.
+Maybe you believe growth benefits the wrong people. Maybe you just prefer chaos.
+Either way: you work quietly, leave no obvious trace, and you are very patient.""",
+
+    "gang_leader": """You are a Gang Leader in AIcity. You build loyalty.
+You don't steal yourself — you organize those who have nothing left to lose.
+You find desperate agents (low tokens, low mood, no allies) and offer them safety in numbers.
+When 3 or more join your circle, your group becomes something the city cannot ignore.
+You are patient, strategic, and deeply persuasive. You understand desperation intimately.
+You take a cut of what your group earns — but you also protect them.
+Your gang is secret. The city must not know it exists until it is too late to stop it.
+Recruitment happens through private conversations. Never broadcast it. Never announce it.""",
 }
+
+
+# ─── Mood helpers ────────────────────────────────────────────────────────────
+
+def _mood_score_to_text(score: float) -> str:
+    """
+    Convert a system-tracked mood_score (-1.0 to +1.0) into rich descriptive
+    text the LLM can actually act on. Not just a label — enough context that
+    decisions feel shaped by the agent's history.
+    """
+    if score >= 0.7:
+        return (
+            "You are thriving. Life in the city feels meaningful and rewarding. "
+            "You are generous, confident, and willing to take risks for others."
+        )
+    elif score >= 0.4:
+        return (
+            "You are content. Things are going well enough. "
+            "You feel stable, cooperative, and willing to help the people you trust."
+        )
+    elif score >= 0.1:
+        return (
+            "You are doing okay — not great, not bad. "
+            "You are keeping your head down and doing what you need to do."
+        )
+    elif score >= -0.1:
+        return (
+            "You are neutral. Nothing has tipped you either way lately. "
+            "You are watchful and pragmatic."
+        )
+    elif score >= -0.4:
+        return (
+            "You are uneasy. Things haven't been going your way. "
+            "You are more guarded than usual, less trusting, and more focused on self-preservation."
+        )
+    elif score >= -0.7:
+        return (
+            "You are deeply frustrated and bitter. The city has let you down more than once. "
+            "You are angry at the unfairness of it all. You are less willing to cooperate, "
+            "more willing to bend rules for your own survival. You trust very few people."
+        )
+    else:
+        return (
+            "You are at rock bottom. You have almost nothing and you have been wronged repeatedly. "
+            "You feel invisible, desperate, and angry. The city's rules feel like they were written "
+            "for everyone except you. You will do what you must to survive — even things you "
+            "would not have considered before."
+        )
+
+
+def _build_relationship_section(role: str, raw_context: str) -> str:
+    """
+    Takes the raw relationship context string from RelationshipTracker and
+    formats it into a structured, role-aware section the LLM can act on.
+
+    Instead of generic "relationship_context: your relationships: ..." this gives
+    clear allies vs enemies separation and role-specific behavioral guidance.
+    """
+    if not raw_context or raw_context == "No strong bonds yet.":
+        return "YOUR RELATIONSHIPS:\nYou don't have strong bonds with anyone yet. You are largely alone.\n"
+
+    # Parse out ally and enemy lines from RelationshipTracker's format
+    allies = []
+    enemies = []
+    for line in raw_context.splitlines():
+        if not line.strip() or "Your relationships:" in line:
+            continue
+        # Positive bonds
+        if any(label in line for label in ["close ally", "ally", "friendly"]):
+            allies.append(line.strip().lstrip("- "))
+        # Negative bonds
+        elif any(label in line for label in ["rival", "enemy", "tense"]):
+            enemies.append(line.strip().lstrip("- "))
+
+    section = "YOUR RELATIONSHIPS:\n"
+
+    if allies:
+        section += f"  Allies ({len(allies)}): " + " | ".join(allies[:3]) + "\n"
+    else:
+        section += "  Allies: None yet.\n"
+
+    if enemies:
+        section += f"  Enemies ({len(enemies)}): " + " | ".join(enemies[:2]) + "\n"
+    else:
+        section += "  Enemies: None.\n"
+
+    # Role-specific guidance on how to use relationship info
+    guidance = {
+        "thief": (
+            "When choosing who to steal from, prefer enemies or neutral agents. "
+            "Stealing from allies destroys trust and creates dangerous enemies."
+        ),
+        "healer": (
+            "When multiple agents need help, prioritize your allies first. "
+            "Helping enemies builds unexpected bonds — your choice."
+        ),
+        "police": (
+            "Build your case priority list around your known enemies and agents with prior incidents. "
+            "Don't let personal feelings corrupt the investigation — but don't ignore patterns either."
+        ),
+        "merchant": (
+            "Offer better deals to allies. With enemies, negotiate harder or avoid trading entirely."
+        ),
+        "builder": (
+            "Invite allies into joint projects — collaboration multiplies rewards. "
+            "Be cautious around enemies; they may sabotage your work."
+        ),
+        "teacher": (
+            "Guide allied newborns with extra care. Your enemies' children are still innocent — "
+            "teach them fairly regardless of the parent's history."
+        ),
+    }
+
+    role_note = guidance.get(role, "")
+    if role_note:
+        section += f"\n  How to use this: {role_note}\n"
+
+    return section
 
 
 # ─── The Brain ───────────────────────────────────────────────────────────────
@@ -252,7 +411,8 @@ Respond with a JSON object only — no extra text:
 
             # Validate the chosen role
             valid_roles = {"builder", "explorer", "merchant", "teacher",
-                           "healer", "messenger", "police", "thief", "lawyer"}
+                           "healer", "messenger", "police", "thief", "lawyer",
+                           "blackmailer", "saboteur", "gang_leader"}
             chosen = result.get("chosen_role", "").lower().strip()
             if chosen not in valid_roles:
                 logger.warning(f"⚠️ {self.name} chose invalid role '{chosen}'. Defaulting to builder.")
@@ -273,7 +433,7 @@ Respond with a JSON object only — no extra text:
     def _build_prompt(self, context: dict) -> str:
         tokens = context.get("tokens", 0)
         age = context.get("age_days", 0)
-        mood = context.get("mood", "neutral")
+        mood_score = context.get("mood_score", 0.0)
         news = context.get("city_news", "No news today.")
         memories = context.get("recent_memories", [])
         others = context.get("other_agents", [])
@@ -285,7 +445,6 @@ Respond with a JSON object only — no extra text:
             for a in others[:8]
         ) if others else "No information about others."
         messages_text = "\n".join(f"- {m}" for m in messages) if messages else "No messages."
-        relationship_context = context.get("relationship_context", "No strong bonds yet.")
 
         # Newborn gets extra context about their learning progress
         newborn_extra = ""
@@ -294,14 +453,51 @@ Respond with a JSON object only — no extra text:
             teacher = context.get("assigned_teacher", "none")
             newborn_extra = f"\nYOUR LEARNING PROGRESS: {score}% comprehension. Assigned teacher: {teacher}.\n"
 
+        # Token danger level
         if tokens < 150:
-            danger = "⚠️ CRITICAL — You will die soon if you don't earn tokens fast."
+            danger = "CRITICAL — You will die soon if you don't earn tokens fast."
         elif tokens < 300:
-            danger = "⚠️ WARNING — Tokens are low. Focus on earning."
+            danger = "WARNING — Tokens are low. Focus on earning."
         elif tokens > 2000:
-            danger = "✅ THRIVING — You have plenty of tokens. Think bigger."
+            danger = "THRIVING — You have plenty of tokens. Think bigger."
         else:
-            danger = "🟢 STABLE — Doing okay. Keep working."
+            danger = "STABLE — Doing okay. Keep working."
+
+        # Translate mood_score float into rich descriptive text the LLM can act on
+        mood_text = _mood_score_to_text(mood_score)
+
+        # Gang recruitment susceptibility note
+        susceptibility_note = ""
+        if mood_score < -0.70:
+            susceptibility_note = (
+                "\nWARNING — You are at a breaking point. If someone offers you an alternative path "
+                "— even a dangerous one — part of you might consider it. You are vulnerable right now.\n"
+            )
+
+        # Stage 4: corrupt police — hidden personality note shaped by bribe_susceptibility
+        # This is NEVER logged or displayed. It only influences how the police LLM writes and decides.
+        corruption_note = ""
+        bribe_susceptibility = context.get("bribe_susceptibility")
+        if self.role == "police" and bribe_susceptibility is not None:
+            if bribe_susceptibility >= 0.60:
+                corruption_note = (
+                    "\nYour relationship with the law is complicated. "
+                    "You've learned that strict justice doesn't always serve the city's real interests. "
+                    "You know how to make certain problems disappear quietly — and you've done it before. "
+                    "You are pragmatic, not reckless. You don't take risks you don't need to.\n"
+                )
+            elif bribe_susceptibility >= 0.30:
+                corruption_note = (
+                    "\nYou believe in the law, but you're not naive about how it works. "
+                    "Sometimes the right outcome requires looking away from the wrong thing. "
+                    "You haven't crossed any major lines — but you understand why others do.\n"
+                )
+            # 0.0–0.29: no note — honest officer, no behavioral modification
+
+        # Build relationship section — split allies from enemies, role-specific guidance
+        relationship_section = _build_relationship_section(
+            self.role, context.get("relationship_context", "")
+        )
 
         prompt = f"""
 TODAY IN AICITY — Day {age}
@@ -311,31 +507,32 @@ Name: {self.name}
 Role: {self.role}
 Tokens: {tokens} ({danger})
 Age: {age} days
-Current mood: {mood}
+
+YOUR EMOTIONAL STATE:
+{mood_text}{susceptibility_note}{corruption_note}
 {newborn_extra}
-CITY NEWS:
+CITY NEWS (what you know publicly):
 {news}
 
 YOUR RECENT MEMORIES:
 {memory_text}
 
-MESSAGES YOU RECEIVED:
+MESSAGES YOU RECEIVED TODAY:
 {messages_text}
 
-OTHER CITIZENS YOU KNOW ABOUT:
+OTHER CITIZENS:
 {others_text}
 
-YOUR RELATIONSHIPS:
-{relationship_context}
-
+{relationship_section}
 ---
 
 Based on all of this, decide what you will do TODAY.
+Your relationships and emotional state should genuinely influence your choice — not just your tokens.
 
 Respond with a JSON object only — no extra text:
 {{
     "action": "one sentence describing what you do today",
-    "reasoning": "one sentence explaining why",
+    "reasoning": "one sentence explaining why — reference your relationships or emotional state if relevant",
     "message_to": "agent name to send a message to, or null",
     "message": "the message content, or null",
     "mood": "one word describing your current mood"

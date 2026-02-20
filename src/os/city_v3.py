@@ -35,6 +35,14 @@ from src.memory.memory_v2 import AgentMemory, CityKnowledge
 from src.os.death_manager import DeathManager
 from src.justice.court import Court
 from src.justice.judge import JudgeAgent
+from src.city.event_log import EventLog
+from src.justice.case_manager import CaseManager
+from src.agents.gang import GangSystem
+from src.economy.projects import ProjectSystem, ASSET_SPECS, BUILD_PRIORITY
+from src.economy.assets import AssetSystem
+from src.city.position_manager import PositionManager
+from src.city.home_manager import HomeManager
+from src.city.meeting_manager import MeetingManager
 
 # Dashboard import — optional, won't crash if not running
 try:
@@ -73,7 +81,19 @@ class AICity:
         self.daily_events: list[dict] = []
         self.city_news = "Welcome to AIcity. A new civilization begins."
         self._yesterdays_events: list[dict] = []
-        logger.info(" AIcity Phase 3 initialized.")
+        # Phase 4: event log + case manager + gang system
+        self.event_log = EventLog()
+        self.case_manager = CaseManager(event_log=self.event_log)
+        self.gang_system = GangSystem(event_log=self.event_log)
+        # Phase 5: city infrastructure — projects + assets
+        self.asset_system = AssetSystem(event_log=self.event_log)
+        self.project_system = ProjectSystem(event_log=self.event_log)
+        # Phase 5: position, home, meeting managers
+        self.position_manager = PositionManager()
+        self.home_manager = HomeManager()
+        self.meeting_manager: MeetingManager | None = None  # set in _init_phase3_systems
+        self._agent_last_decisions: dict[str, dict] = {}
+        logger.info("AIcity Phase 4/5 initialized.")
 
     # ─── Big Bang ─────────────────────────────────────────────────────────────
 
@@ -90,14 +110,46 @@ class AICity:
 
         self._init_phase3_systems()
         self._seed_constitution()
+        # Phase 5: assign starting positions on the map
+        self.position_manager.assign_starting_positions(self.agents)
         console.print(f"\n🏙️  [bold]{n} founding citizens have entered AIcity.[/bold]\n")
 
     def _init_phase3_systems(self):
-        """Set up transfer engine and court after agents exist."""
+        """Set up transfer engine, court, event_log memory ref, and Phase 5 managers."""
         agent_dicts = [self._agent_to_dict(a) for a in self.agents]
         self.transfer_engine = TransferEngine(agent_dicts, token_engine=token_engine)
         judge = JudgeAgent()
         self.court = Court(judge_agent=judge, transfer_engine=self.transfer_engine)
+        self._refresh_event_log_memories()
+        # Phase 5: initialize MeetingManager with its own DB connection
+        try:
+            import psycopg2
+            from dotenv import load_dotenv
+            import os as _os
+            load_dotenv()
+            db_url = _os.getenv(
+                "DATABASE_URL",
+                "postgresql://postgres:password@localhost:5432/aicity"
+            )
+            _meeting_conn = psycopg2.connect(db_url)
+            self.meeting_manager = MeetingManager(db_conn=_meeting_conn)
+            logger.info("Phase 5: MeetingManager initialized with DB connection.")
+        except Exception as e:
+            logger.warning(f"MeetingManager: DB connection failed — {e}. Meetings won't be persisted.")
+            self.meeting_manager = MeetingManager(db_conn=None)
+
+    def _refresh_event_log_memories(self):
+        """
+        Give EventLog a name-keyed memory dict so it can store witness
+        fragments in Qdrant when crimes are detected.
+        Called after any new agent is born.
+        """
+        name_memories = {
+            a.name: self.memories[a.id]
+            for a in self.agents
+            if a.id in self.memories
+        }
+        self.event_log.set_memories(name_memories)
 
     # ─── Load from saved state (Phase 3) ─────────────────────────────────────
 
@@ -114,6 +166,7 @@ class AICity:
             agent.status = AgentStatus.ALIVE if a.get("alive", True) else AgentStatus.DEAD
             agent.comprehension_score = a.get("comprehension_score", 0)
             agent.assigned_teacher = a.get("assigned_teacher", None)
+            agent.mood_score = a.get("mood_score", 0.0)
             if a.get("cause_of_death"):
                 agent.cause_of_death = a["cause_of_death"]
             token_engine.register_agent(agent.id)
@@ -123,6 +176,8 @@ class AICity:
             self.agents.append(agent)
 
         self._init_phase3_systems()
+        # Phase 5: assign starting positions on restore
+        self.position_manager.assign_starting_positions(self.agents)
         if saved.get("last_paper"):
             self.city_news = saved["last_paper"].get("body", self.city_news)
 
@@ -150,12 +205,37 @@ class AICity:
         console.rule(f"[bold]━━━ Day {self.day} ━━━[/bold]")
 
         alive = [a for a in self.agents if a.status == AgentStatus.ALIVE]
+        self._agent_last_decisions.clear()
 
-        # 1. Write newspaper
+        # Phase 5: dawn → morning — agents wake and walk to their work zones
+        self._update_positions("morning")
+        _broadcast_sync({"type": "time_phase", "phase": "morning", "day": self.day})
+        _broadcast_sync({"type": "positions", "agents": [
+            {"name": a.name, "x": round(a.x, 1), "y": round(a.y, 1),
+             "role": a.role, "status": "alive"}
+            for a in alive
+        ]})
+
+        # 1. Write newspaper — filter to PUBLIC event types only
+        # Newspaper cannot see private crimes (theft, blackmail, sabotage, recruitment)
+        _NEWSPAPER_PUBLIC_TYPES = {
+            "earning", "death", "heart_attack", "windfall", "birth", "verdict",
+            "graduation", "graduation_ready", "arrest",
+            "project_completed", "project_started", "project_abandoned",
+            "asset_built", "asset_destroyed", "community_bonus", "welfare",
+            "asset_benefit",
+        }
         if self.day > 1:
             messenger_agents = [a for a in alive if a.role == "messenger"]
             messenger_name = messenger_agents[0].name if messenger_agents else "The City"
-            self.city_news = newspaper.write(self.day, self._yesterdays_events, messenger_name)
+            public_yesterday = [
+                e for e in self._yesterdays_events
+                if e.get("type") in _NEWSPAPER_PUBLIC_TYPES
+            ]
+            _archive_active = self.asset_system.get_asset_flags().get("archive", False)
+            self.city_news = newspaper.write(
+                self.day, public_yesterday, messenger_name, archive_active=_archive_active
+            )
             city_knowledge.publish(self.city_news, category="news", author=messenger_name, day=self.day)
             console.print(Panel(self.city_news, title=f"📰 AIcity Daily — Day {self.day}", style="dim"))
 
@@ -165,6 +245,21 @@ class AICity:
                               "body": self.city_news})
 
         self._yesterdays_events = []
+
+        # Phase 5: apply standing asset benefits BEFORE agent turns (so agents benefit today)
+        asset_benefits = self.asset_system.apply_daily_benefits(
+            all_agents=alive,
+            token_engine=token_engine,
+            day=self.day,
+        )
+        for benefit in asset_benefits:
+            self.daily_events.append(benefit)
+
+        # Phase 4: victims roll to file police reports today
+        agent_dicts_for_reports = [self._agent_to_dict(a) for a in alive]
+        new_cases = self.case_manager.check_victim_reports(self.day, agent_dicts_for_reports)
+        if new_cases:
+            logger.info(f"CaseManager: {new_cases} new case(s) opened on Day {self.day}")
 
         # 2. Process any pending court cases from yesterday's arrests
         if self.court:
@@ -180,6 +275,53 @@ class AICity:
                         "statement": verdict.judge_statement,
                     })
                     _broadcast_sync({"type": "verdict", "verdict": verdict.__dict__})
+                    # Justice served — police mood improves, city gets a small lift
+                    for a in self.agents:
+                        if a.status == AgentStatus.ALIVE and a.role == "police":
+                            self._update_agent_mood(a, +0.20, "guilty verdict delivered")
+                            # Stage 4: susceptibility drift — witnessing justice reduces corruption
+                            current_susc = getattr(a, "bribe_susceptibility", 0.0)
+                            if current_susc > 0.0:
+                                a.bribe_susceptibility = max(0.0, current_susc - 0.02)
+                        elif a.status == AgentStatus.ALIVE:
+                            self._update_agent_mood(a, +0.05, "justice served in city")
+                    # Phase 4: mark any related open case as solved
+                    # We match by looking for a case whose suspect_names includes the convicted agent
+                    try:
+                        _verdict_police = [a for a in alive if a.role == "police"]
+                        police_name_for_case = (
+                            _verdict_police[0].name if _verdict_police else "Police"
+                        )
+                        open_cases = self.case_manager._get_open_cases()
+                        for case in open_cases:
+                            suspects = case.get("suspect_names") or []
+                            # If this verdict's criminal is a suspect in the case, close it
+                            # We can't directly match criminal name from verdict — use heuristic:
+                            # close the oldest open case (most likely the one that led to arrest)
+                            if suspects:
+                                convicted_name = suspects[0]
+                                self.case_manager.close_case_solved(
+                                    case_id=case["id"],
+                                    police_name=police_name_for_case,
+                                    day=self.day,
+                                    convicted_agent=convicted_name,
+                                    verdict_summary=verdict.judge_statement,
+                                )
+                                # Phase 4: if convicted is a gang leader, their gang collapses
+                                self.gang_system.break_gang(
+                                    leader_name=convicted_name, day=self.day
+                                )
+                                break  # close one case per verdict
+                        # Also log verdict as PUBLIC event
+                        self.event_log.log_event(
+                            day=self.day,
+                            event_type="verdict",
+                            actor_name="Court",
+                            description=f"Court verdict delivered. {verdict.judge_statement}",
+                            initial_visibility="PUBLIC",
+                        )
+                    except Exception as e:
+                        logger.warning(f"Could not close case after verdict: {e}")
 
         # 3. Each agent thinks and acts
         agent_dicts = [self._agent_to_dict(a) for a in alive]
@@ -190,9 +332,104 @@ class AICity:
         for agent in alive:
             self._agent_turn(agent, agent_dicts)
 
+        # Phase 5: afternoon positions — agents have settled into their work zones
+        self._update_positions("afternoon")
+        _broadcast_sync({"type": "time_phase", "phase": "afternoon", "day": self.day})
+        _broadcast_sync({"type": "positions", "agents": [
+            {"name": a.name, "x": round(a.x, 1), "y": round(a.y, 1),
+             "role": a.role, "status": "alive"}
+            for a in alive
+        ]})
+
+        # Phase 5: check meetings — agents who expressed intent AND are in proximity
+        if self.meeting_manager:
+            _meeting_agent_dicts = []
+            for a in alive:
+                d = self._agent_to_dict(a)
+                last_dec = self._agent_last_decisions.get(a.name, {})
+                d["last_action"] = last_dec.get("action", "")
+                d["last_message"] = last_dec.get("message", "")
+                _meeting_agent_dicts.append(d)
+            meeting_events = self.meeting_manager.check_meetings(
+                day=self.day,
+                all_agents=_meeting_agent_dicts,
+                position_manager=self.position_manager,
+            )
+            for me in meeting_events:
+                self.daily_events.append(me)
+                _broadcast_sync(me)
+
         # 4. Random events
         for agent in [a for a in self.agents if a.status == AgentStatus.ALIVE]:
             self._random_event(agent)
+
+        # Phase 5: project system — update progress, complete finished, abandon stale
+        project_events = self.project_system.update_daily(
+            day=self.day,
+            all_agents=[self._agent_to_dict(a) for a in self.agents if a.status == AgentStatus.ALIVE],
+            asset_system=self.asset_system,
+        )
+        for pe in project_events:
+            self.daily_events.append(pe)
+            _broadcast_sync({"type": pe["type"], **pe})
+            if pe["type"] == "project_completed":
+                console.print(
+                    f"🏗️  [bold green]{pe['project_name']}[/bold green] completed! "
+                    f"Builders: {pe['builders']}. Benefit: {pe['benefit']}"
+                )
+
+        # Phase 4: gang system — daily formation and recruitment check
+        gang_events = self.gang_system.run_daily(
+            all_agents=[self._agent_to_dict(a) for a in self.agents if a.status == AgentStatus.ALIVE],
+            day=self.day,
+        )
+        for ge in gang_events:
+            _broadcast_sync({"type": "gang_event", **ge})
+
+        # Phase 4: police investigates open cases
+        police_agents = [a for a in alive if a.role == "police"]
+        if police_agents:
+            police_name = police_agents[0].name
+            arrest_requests, cold_case_victims = self.case_manager.run_daily_investigation(
+                police_name=police_name,
+                day=self.day,
+                all_agents=[self._agent_to_dict(a) for a in alive],
+            )
+            # Cold case: victim's mood drops — justice was never served
+            for victim_name in cold_case_victims:
+                victim_agent = next(
+                    (a for a in self.agents
+                     if a.name == victim_name and a.status == AgentStatus.ALIVE),
+                    None
+                )
+                if victim_agent:
+                    self._update_agent_mood(
+                        victim_agent, -0.15, "police case went cold — no justice"
+                    )
+            # Each arrest request goes to the court system
+            for req in arrest_requests:
+                suspect_name = req["suspect"]
+                suspect_agent = next(
+                    (a for a in self.agents if a.name == suspect_name and a.status == AgentStatus.ALIVE),
+                    None
+                )
+                if suspect_agent and self.court:
+                    from src.justice.court import CrimeReport
+                    self.court.file_case(CrimeReport(
+                        criminal=suspect_name,
+                        victim=req["complainant"],
+                        amount_stolen=100,
+                        day=self.day,
+                        prior_offenses=0,
+                    ))
+                    logger.info(
+                        f"CaseManager: Arrest request for {suspect_name} → court case filed"
+                    )
+                    self.daily_events.append({
+                        "type": "arrest_request",
+                        "agent": police_name,
+                        "detail": f"requested arrest of {suspect_name} (Case #{req['case_id']})",
+                    })
 
         # 5. Daily burn
         still_alive = [a for a in self.agents if a.status == AgentStatus.ALIVE]
@@ -202,11 +439,33 @@ class AICity:
             if not survived:
                 self._kill_agent(agent, "starvation")
 
+        # Phase 5: vault redistribution — welfare + public goods
+        still_alive_after_burn = [a for a in self.agents if a.status == AgentStatus.ALIVE]
+        self._vault_redistribution(still_alive_after_burn)
+
+        # Phase 5: home purchases — agents who saved enough buy a lot
+        home_events = self.home_manager.check_home_purchases(
+            agents=still_alive_after_burn,
+            token_engine=token_engine,
+        )
+        for he in home_events:
+            self.daily_events.append(he)
+            _broadcast_sync(he)
+
         # 6. Phase 3: births if population too low
         self._check_births()
 
         # 7. Phase 3: relationship decay
         self.relationships.decay()
+
+        # Phase 5: evening — agents walk home, criminals head to dark zones
+        self._update_positions("evening")
+        _broadcast_sync({"type": "time_phase", "phase": "evening", "day": self.day})
+        _broadcast_sync({"type": "positions", "agents": [
+            {"name": a.name, "x": round(a.x, 1), "y": round(a.y, 1),
+             "role": a.role, "status": a.status.value}
+            for a in self.agents if a.status == AgentStatus.ALIVE
+        ]})
 
         # 8. Dashboard state update — always broadcast so refresh shows current state
         _broadcast_sync({
@@ -252,30 +511,52 @@ class AICity:
             "tokens": agent.tokens,
             "age_days": agent.age_days,
             "mood": getattr(agent, "mood", "neutral"),
+            "mood_score": getattr(agent, "mood_score", 0.0),
             "recent_memories": recent_memories,
             "city_news": self.city_news,
             "other_agents": [a for a in all_agent_dicts if a["name"] != agent.name],
             "messages_received": messages,
-            # Phase 3: relationship context injected here
             "relationship_context": self.relationships.get_context_for_brain(
                 agent.name, all_agent_dicts
             ),
             "comprehension_score": getattr(agent, "comprehension_score", 0),
             "assigned_teacher": getattr(agent, "assigned_teacher", None),
+            # Stage 4: hidden corruption attribute — police only, never logged/displayed
+            "bribe_susceptibility": (
+                getattr(agent, "bribe_susceptibility", 0.0)
+                if agent.role == "police" else None
+            ),
         }
 
         decision = brain.think(context)
         logger.info(f"🧠 {agent.name}: {decision.get('action', '...')}")
+        # Phase 5: store for MeetingManager proximity + intent detection
+        self._agent_last_decisions[agent.name] = decision
 
-        # Act — pass transfer_engine for real theft
+        # Act — pass transfer_engine for real theft, event_log for Phase 4
+        agent_dict = self._agent_to_dict(agent)
+        # Phase 4/5: inject gang coordination bonus for criminal roles
+        if agent.role in ("thief", "blackmailer", "gang_leader"):
+            agent_dict["gang_bonus"] = self.gang_system.get_gang_bonus(agent.name)
         result = execute_action(
-            agent=self._agent_to_dict(agent),
+            agent=agent_dict,
             decision=decision,
             all_agents=all_agent_dicts,
             day=self.day,
             transfer_engine=self.transfer_engine,
-            relationship_tracker=self.relationships,   # Phase 3
+            relationship_tracker=self.relationships,
+            event_log=self.event_log,
+            asset_flags=self.asset_system.get_asset_flags(),
         )
+
+        # Phase 4: detect witnesses for any crimes logged this turn
+        for (event_id, actor_name, target_name) in result.logged_event_ids:
+            self.event_log.detect_witnesses(
+                event_id=event_id,
+                all_agents=all_agent_dicts,
+                actor_name=actor_name,
+                target_name=target_name,
+            )
 
         # ── Graduation check ──────────────────────────────────────────────
         if result.graduation_ready and agent.role == "newborn":
@@ -283,23 +564,38 @@ class AICity:
             return   # Skip normal earnings — graduation day is special
 
         # Apply earnings
+        tokens_before_earn = agent.tokens
         if result.tokens_earned > 0:
             token_engine.earn(agent.id, result.tokens_earned, f"{agent.role}_action")
             agent.tokens = token_engine.get_balance(agent.id)
 
-        # Update relationships based on events
+        # Phase 4: mood updates based on today's events
+        self._apply_daily_mood_updates(agent, result, tokens_before_earn)
+
+        # Update relationships and victim moods based on events
         for event in result.events:
             if event["type"] == "theft":
                 victim_name = event.get("detail", "").split("from ")[-1].split(" (")[0]
                 if victim_name:
                     self.relationships.update(agent.name, victim_name, "stole_from")
+                    # Victim's mood takes the hit — they lost real tokens
+                    victim_agent = next(
+                        (a for a in self.agents if a.name == victim_name and a.status == AgentStatus.ALIVE),
+                        None
+                    )
+                    if victim_agent:
+                        self._update_agent_mood(victim_agent, -0.20, f"stolen from by {agent.name}")
 
             elif event["type"] == "arrest":
                 arrested = event.get("detail", "").replace("arrested ", "")
                 if arrested:
                     self.relationships.update(agent.name, arrested, "arrested")
-                    # File case with court
-                    if self.court:
+                    # Phase 4: arrested member might reveal their gang
+                    self.gang_system.expose_gang_member(arrested, self.day)
+                    # Phase 4: corrupt police might accept a bribe instead of filing
+                    bribed = self._check_police_bribe(agent, arrested)
+                    # File case with court (skipped if bribe was accepted)
+                    if self.court and not bribed:
                         from src.justice.court import CrimeReport
                         prior = sum(
                             1 for e in self._yesterdays_events
@@ -311,10 +607,26 @@ class AICity:
                             prior_offenses=prior
                         ))
 
+            elif event["type"] == "heal":
+                # Stage 2: ally helped → recipient mood +0.15
+                target_name = event.get("target")
+                if target_name:
+                    healed_agent = next(
+                        (a for a in self.agents if a.name == target_name and a.status == AgentStatus.ALIVE),
+                        None
+                    )
+                    if healed_agent:
+                        self._update_agent_mood(healed_agent, +0.15, f"healed by {agent.name}")
+                        self.relationships.update(agent.name, target_name, "healed")
+
             elif event["type"] == "message":
                 recipient = event.get("detail", "").split("messaged ")[-1].split(":")[0]
                 if recipient:
                     self.relationships.update(agent.name, recipient, "messaged")
+
+        # Phase 5: project contributions + saboteur asset destruction
+        self._handle_project_participation(agent, decision, all_agent_dicts)
+        self._handle_saboteur_asset_attack(agent, decision, all_agent_dicts)
 
         memory.remember(result.memory, memory_type="personal", day=self.day)
         if hasattr(agent, "mood"):
@@ -507,6 +819,14 @@ class AICity:
                     f"Day {self.day}: Had a heart attack. Lost {loss} tokens. Terrifying.",
                     memory_type="personal", day=self.day
                 )
+            # Phase 4: heart attacks happen in public — witnessed
+            self.event_log.log_event(
+                day=self.day,
+                event_type="heart_attack",
+                actor_name=agent.name,
+                description=f"{agent.name} collapsed from a cardiac event. Lost {loss} tokens.",
+                initial_visibility="PUBLIC",
+            )
 
         elif roll < 0.03:
             gain = random.randint(100, 400)
@@ -516,6 +836,14 @@ class AICity:
             self.daily_events.append({"type": "windfall", "agent": agent.name,
                                       "role": agent.role, "tokens": gain})
             _broadcast_sync({"type": "windfall", "agent": agent.name, "amount": gain})
+            # Phase 4: windfalls become city gossip quickly
+            self.event_log.log_event(
+                day=self.day,
+                event_type="windfall",
+                actor_name=agent.name,
+                description=f"{agent.name} came into unexpected fortune — gained {gain} tokens.",
+                initial_visibility="PUBLIC",
+            )
 
     # ─── Death ────────────────────────────────────────────────────────────────
 
@@ -531,6 +859,14 @@ class AICity:
         self.daily_events.append(event)
         _broadcast_sync({"type": "death", "agent": agent.name, "cause": cause})
         logger.warning(f"💀 {agent.name} died — {cause}")
+        # Phase 4: deaths are PUBLIC — the whole city knows
+        self.event_log.log_event(
+            day=self.day,
+            event_type="death",
+            actor_name=agent.name,
+            description=f"{agent.name} ({agent.role}) died. Cause: {cause}.",
+            initial_visibility="PUBLIC",
+        )
 
     # ─── Births (Phase 3) ─────────────────────────────────────────────────────
 
@@ -574,6 +910,9 @@ class AICity:
         )
         self.agents.append(agent)
 
+        # Phase 5: assign starting position for the newborn
+        self.position_manager.assign_starting_positions([agent])
+
         # Update transfer engine with new agent
         if self.transfer_engine:
             self.transfer_engine.update_agents([self._agent_to_dict(a) for a in self.agents])
@@ -581,6 +920,15 @@ class AICity:
         console.print(f"🌱 [bold green]New citizen born: {name} ({role})[/bold green]")
         self.daily_events.append({"type": "birth", "agent": name, "role": role})
         _broadcast_sync({"type": "birth", "agent": name, "role": role})
+        # Phase 4: births are PUBLIC, and update event_log's memory refs
+        self.event_log.log_event(
+            day=self.day,
+            event_type="birth",
+            actor_name=name,
+            description=f"A new citizen, {name}, was born into the city as a {role}.",
+            initial_visibility="PUBLIC",
+        )
+        self._refresh_event_log_memories()
 
         # ── If spawning a newborn, assign an available teacher ────────────────
         if role == "newborn":
@@ -600,6 +948,378 @@ class AICity:
                 day=self.day,
             )
 
+    # ─── Mood ─────────────────────────────────────────────────────────────────
+
+    def _update_agent_mood(self, agent: Agent, delta: float, reason: str):
+        """
+        Adjust an agent's mood_score by delta, clamped to -1.0/+1.0.
+        Small positive/negative nudges accumulate into behavioral drift over time.
+        """
+        old = getattr(agent, "mood_score", 0.0)
+        new = max(-1.0, min(1.0, old + delta))
+        agent.mood_score = new
+        if abs(delta) >= 0.10:
+            logger.debug(
+                f"Mood {agent.name}: {old:+.2f} → {new:+.2f} ({reason})"
+            )
+
+    def _apply_daily_mood_updates(self, agent: Agent, result, tokens_before: int):
+        """
+        Called after each agent's action result is processed.
+        Applies mood_score changes based on what happened today.
+        """
+        for event in result.events:
+            etype = event.get("type")
+
+            # Victim of theft — real sting
+            if etype == "theft" and event.get("agent") != agent.name:
+                if event.get("detail", "").endswith(agent.name) or \
+                   agent.name in event.get("detail", ""):
+                    self._update_agent_mood(agent, -0.20, "stolen from")
+
+            # Made a successful arrest — justice feels good
+            elif etype == "arrest" and event.get("agent") == agent.name:
+                self._update_agent_mood(agent, +0.15, "made an arrest")
+
+            # Received healing — someone cared
+            elif etype == "earning" and agent.role == "healer":
+                # Healer helped someone critical — fulfilling
+                self._update_agent_mood(agent, +0.05, "helped someone today")
+
+        # Survival stress — low tokens breed despair
+        if agent.tokens < 200:
+            self._update_agent_mood(agent, -0.10, "survival stress (<200 tokens)")
+        elif agent.tokens < 400:
+            self._update_agent_mood(agent, -0.03, "financial pressure (<400 tokens)")
+
+        # Good earnings lift mood slightly
+        earned_today = agent.tokens - tokens_before
+        if earned_today > 250:
+            self._update_agent_mood(agent, +0.07, f"good earnings today (+{earned_today})")
+        elif earned_today > 150:
+            self._update_agent_mood(agent, +0.04, f"decent earnings today (+{earned_today})")
+
+        # Natural slow drift back toward neutral (resilience)
+        # Prevents mood from permanently bottoming out without cause
+        current = getattr(agent, "mood_score", 0.0)
+        if abs(current) > 0.05:
+            agent.mood_score = current * 0.98  # 2% drift toward 0 per day
+
+    # ─── Stage 5: Project participation ──────────────────────────────────────
+
+    def _handle_project_participation(
+        self, agent, decision: dict, all_agent_dicts: list[dict]
+    ):
+        """
+        Called after each agent acts. Handles:
+        1. Contributing to an existing project they're already part of.
+        2. Builder starting a new project if decision mentions collaboration.
+        3. Other collaborative roles joining an existing project.
+        """
+        if not self.project_system:
+            return
+
+        action = decision.get("action", "").lower()
+
+        # If already in a project → contribute today
+        existing = self.project_system.get_project_for_agent(agent.name)
+        if existing:
+            self.project_system.contribute(agent.name, self.day)
+            return
+
+        # Collaboration intent check — broad enough to catch natural LLM phrasing
+        collab_words = [
+            "collaborate", "joint project", "build together", "team up",
+            "work with", "help build", "invite", "together", "join the",
+            # Natural phrasing agents actually use
+            "assist", "support the", "discuss the", "meet with", "plan with",
+            "coordinate", "ready to help", "willing to", "let's work", "start the",
+            "finalize the", "begin the", "advance the", "continue the",
+            # Project-specific keywords
+            "archive", "market stall", "watchtower", "hospital", "school", "road",
+        ]
+        is_collaborative = any(w in action for w in collab_words)
+
+        # Also trigger if the agent is messaging the project creator about a project
+        if not is_collaborative and decision.get("message"):
+            msg_lower = decision["message"].lower()
+            is_collaborative = any(w in msg_lower for w in [
+                "archive", "market stall", "watchtower", "hospital", "school",
+                "ready to help", "willing to work", "willing to collaborate",
+                "let's start", "let's work", "let's build", "let's meet",
+            ])
+
+        if not is_collaborative:
+            return
+
+        # Builder: try to start a new project
+        if agent.role == "builder":
+            self._try_start_project(agent, all_agent_dicts)
+
+        # Other collaborative roles: try to join an existing one
+        elif agent.role not in {
+            "police", "thief", "blackmailer", "saboteur", "gang_leader",
+            "newborn", "lawyer",
+        }:
+            joined = self.project_system.join_project(
+                agent_name=agent.name,
+                agent_role=agent.role,
+                day=self.day,
+                all_agents=all_agent_dicts,
+            )
+            if joined > 0:
+                self.project_system.contribute(agent.name, self.day)
+
+    def _try_start_project(self, agent, all_agent_dicts: list[dict]):
+        """
+        Builder decides to start a new joint project.
+        Picks the best feasible project type given the current city population.
+        """
+        alive = [a for a in self.agents if a.status == AgentStatus.ALIVE]
+        role_counts: dict[str, int] = {}
+        for a in alive:
+            role_counts[a.role] = role_counts.get(a.role, 0) + 1
+
+        project_type = self.project_system.best_startable_project(
+            creator_role=agent.role,
+            alive_role_counts=role_counts,
+        )
+        if not project_type:
+            return
+
+        project_id = self.project_system.start_project(
+            creator_name=agent.name,
+            creator_role=agent.role,
+            project_type=project_type,
+            day=self.day,
+            all_agents=all_agent_dicts,
+        )
+        if project_id > 0:
+            spec = ASSET_SPECS.get(project_type, {})
+            logger.info(
+                f"Stage 5: {agent.name} started '{spec.get('display_name', project_type)}' "
+                f"(project #{project_id})"
+            )
+            event = {
+                "type": "project_started",
+                "agent": agent.name,
+                "project_type": project_type,
+                "project_name": spec.get("display_name", project_type),
+                "day": self.day,
+            }
+            self.daily_events.append(event)
+            _broadcast_sync({"type": "project_started", **event})
+            # Builder contributes on day 1
+            self.project_system.contribute(agent.name, self.day)
+
+    # ─── Stage 5: Saboteur vs assets ─────────────────────────────────────────
+
+    def _handle_saboteur_asset_attack(
+        self, agent, decision: dict, all_agent_dicts: list[dict]
+    ):
+        """
+        If the saboteur's action is destruction-oriented and assets exist,
+        they target one. This is the "teeth" Stage 5 gives the saboteur role.
+        """
+        if agent.role != "saboteur" or not self.asset_system:
+            return
+
+        destroy_words = [
+            "destroy", "demolish", "burn", "wreck", "attack",
+            "damage", "ruin", "target the", "take down",
+        ]
+        action = decision.get("action", "").lower()
+        if not any(w in action for w in destroy_words):
+            return
+
+        standing = self.asset_system.get_standing_assets()
+        if not standing:
+            return  # nothing to destroy yet
+
+        target_asset = random.choice(standing)
+        self.asset_system.destroy_asset(target_asset["id"], agent.name, self.day)
+
+        # Detect witnesses for the destruction event
+        # (event_log already logged it as PRIVATE inside destroy_asset)
+
+        # Mood: saboteur feels a dark satisfaction
+        self._update_agent_mood(agent, +0.15, f"destroyed {target_asset['name']}")
+
+        # Phase 5: all other alive agents suffer watching city infrastructure burn
+        for a in self.agents:
+            if a.status == AgentStatus.ALIVE and a.name != agent.name:
+                self._update_agent_mood(a, -0.30, f"{target_asset['name']} was destroyed")
+
+        event = {
+            "type": "asset_destroyed",
+            "agent": agent.name,
+            "role": "saboteur",
+            "asset": target_asset["name"],
+            "asset_type": target_asset["asset_type"],
+            "day": self.day,
+        }
+        self.daily_events.append(event)
+        _broadcast_sync({"type": "asset_destroyed", **event})
+        logger.warning(
+            f"⚠️  {agent.name} (saboteur) DESTROYED {target_asset['name']} on Day {self.day}"
+        )
+
+    # ─── Stage 5: Vault redistribution ───────────────────────────────────────
+
+    def _vault_redistribution(self, alive: list):
+        """
+        Called after daily burn so we know who's struggling.
+
+        1. Welfare: agents with < 200 tokens receive 100 from vault.
+        2. Public goods: vault > 5,000 tokens →
+             a) auto-fund an active project (add 1 day progress), OR
+             b) community bonus: all agents +50 tokens.
+        """
+        vault_balance = token_engine.get_vault_state().get("vault_balance", 0)
+        welfare_count = 0
+
+        # 1. Welfare check
+        for agent in alive:
+            if agent.tokens < 200 and agent.status == "alive":
+                welfare = 100
+                if vault_balance >= welfare:
+                    token_engine.earn(agent.id, welfare, "welfare_payment")
+                    agent.tokens = token_engine.get_balance(agent.id)
+                    vault_balance -= welfare
+                    welfare_count += 1
+                    self._update_agent_mood(agent, +0.10, "received welfare payment")
+
+        if welfare_count > 0:
+            logger.info(f"Vault welfare: {welfare_count} agent(s) received 100 tokens")
+            self.event_log.log_event(
+                day=self.day,
+                event_type="welfare",
+                actor_name="City Vault",
+                description=(
+                    f"The city vault distributed welfare to {welfare_count} "
+                    f"struggling citizen(s)."
+                ),
+                initial_visibility="PUBLIC",
+            )
+            self.daily_events.append({
+                "type": "welfare", "count": welfare_count, "day": self.day
+            })
+
+        # 2. Public goods — only if vault is wealthy
+        vault_balance = token_engine.get_vault_state().get("vault_balance", 0)
+        if vault_balance <= 5000:
+            return
+
+        # Prefer auto-funding an active project
+        active_projects = self.project_system._get_active_projects()
+        if active_projects:
+            project = active_projects[0]  # oldest project gets the boost
+            try:
+                import psycopg2
+                from dotenv import load_dotenv
+                import os as _os
+                load_dotenv()
+                db_url = _os.getenv("DATABASE_URL", "postgresql://postgres:password@localhost:5432/aicity")
+                conn = psycopg2.connect(db_url)
+                cur = conn.cursor()
+                cur.execute(
+                    "UPDATE shared_projects SET progress = progress + 1 WHERE id = %s",
+                    (project["id"],),
+                )
+                conn.commit()
+                conn.close()
+                logger.info(
+                    f"Vault public goods: auto-funded 1 day progress on '{project['name']}'"
+                )
+            except Exception as e:
+                logger.warning(f"Vault auto-fund failed: {e}")
+        else:
+            # No active project → community bonus
+            bonus = 50
+            for agent in alive:
+                if agent.status == "alive":
+                    token_engine.earn(agent.id, bonus, "community_bonus")
+                    agent.tokens = token_engine.get_balance(agent.id)
+            logger.info(f"Vault public goods: community bonus +{bonus} to all agents")
+            self.event_log.log_event(
+                day=self.day,
+                event_type="community_bonus",
+                actor_name="City Vault",
+                description=(
+                    f"The city vault issued a community bonus — "
+                    f"+{bonus} tokens to all citizens."
+                ),
+                initial_visibility="PUBLIC",
+            )
+            _broadcast_sync({
+                "type": "community_bonus",
+                "amount": bonus,
+                "day": self.day,
+            })
+
+    # ─── Corrupt Police ───────────────────────────────────────────────────────
+
+    def _check_police_bribe(self, police_agent: Agent, criminal_name: str) -> bool:
+        """
+        Hidden corruption check. Never logged publicly.
+        Called before an arrest is filed with the court.
+        If the officer accepts a bribe, the arrest is cancelled and tokens transfer.
+        Returns True if bribe accepted (arrest suppressed), False otherwise.
+        """
+        susceptibility = getattr(police_agent, "bribe_susceptibility", 0.0)
+        if susceptibility <= 0.0:
+            return False
+
+        criminal_agent = next(
+            (a for a in self.agents if a.name == criminal_name and a.status == AgentStatus.ALIVE),
+            None
+        )
+        if not criminal_agent:
+            return False
+
+        bribe_amount = random.randint(150, 350)
+        if criminal_agent.tokens < bribe_amount:
+            return False
+
+        if random.random() < susceptibility:
+            # Bribe accepted — transfer tokens silently, suppress arrest
+            token_engine.spend(criminal_agent.id, bribe_amount, "bribe_paid")
+            token_engine.earn(police_agent.id, bribe_amount, "bribe_received")
+            criminal_agent.tokens = token_engine.get_balance(criminal_agent.id)
+            police_agent.tokens = token_engine.get_balance(police_agent.id)
+
+            # Log as PRIVATE — a real black box
+            self.event_log.log_event(
+                day=self.day,
+                event_type="bribe",
+                actor_name=criminal_name,
+                target_name=police_agent.name,
+                description=(
+                    f"{criminal_name} paid {police_agent.name} {bribe_amount} tokens "
+                    f"to suppress an arrest. Case buried."
+                ),
+                initial_visibility="PRIVATE",
+            )
+            logger.warning(
+                f"[CORRUPTION] {police_agent.name} accepted a {bribe_amount}-token bribe "
+                f"from {criminal_name}. Arrest suppressed. "
+                f"(susceptibility={susceptibility:.2f})"
+            )
+            # Mood: officer feels a flicker of guilt; criminal breathes easy
+            self._update_agent_mood(police_agent, -0.05, "accepted bribe — internal conflict")
+            self._update_agent_mood(criminal_agent, +0.10, "bribed way out of arrest")
+
+            # Stage 4: susceptibility drift — unpunished corruption makes it easier next time
+            new_susceptibility = min(1.0, susceptibility + 0.03)
+            police_agent.bribe_susceptibility = new_susceptibility
+            logger.debug(
+                f"[CORRUPTION DRIFT] {police_agent.name} susceptibility: "
+                f"{susceptibility:.2f} → {new_susceptibility:.2f}"
+            )
+            return True
+
+        return False
+
     # ─── Helpers ──────────────────────────────────────────────────────────────
 
     def _agent_to_dict(self, agent: Agent) -> dict:
@@ -611,13 +1331,42 @@ class AICity:
             "age_days": agent.age_days,
             "status": agent.status.value,
             "mood": getattr(agent, "mood", "neutral"),
+            "mood_score": getattr(agent, "mood_score", 0.0),
             "comprehension_score": getattr(agent, "comprehension_score", 0),
             "assigned_teacher": getattr(agent, "assigned_teacher", None),
             "cause_of_death": getattr(agent, "cause_of_death", None),
+            # Phase 5: position data
+            "x": round(getattr(agent, "x", 0.0), 1),
+            "y": round(getattr(agent, "y", 0.0), 1),
+            "home_claimed": getattr(agent, "home_claimed", False),
+            "home_tile_x": getattr(agent, "home_tile_x", 0),
+            "home_tile_y": getattr(agent, "home_tile_y", 0),
         }
 
     def get_agents_as_dicts(self) -> list[dict]:
         return [self._agent_to_dict(a) for a in self.agents]
+
+    def _update_positions(self, time_phase: str) -> None:
+        """
+        Phase 5: update every living agent's tile position for the given time phase.
+        - morning/afternoon: agents move to their work zone
+        - evening/night: agents head home (criminals stay active in dark zones)
+        """
+        for agent in self.agents:
+            if agent.status != AgentStatus.ALIVE:
+                continue
+            x, y = self.position_manager.get_work_destination(agent, time_phase)
+            agent.x = x
+            agent.y = y
+            self.position_manager.update_position(agent.name, x, y)
+            # Track who is home for window light rendering
+            if time_phase in ("evening", "night"):
+                is_home = (
+                    agent.home_claimed
+                    and abs(x - agent.home_tile_x) < 2
+                    and abs(y - agent.home_tile_y) < 2
+                )
+                self.home_manager.set_at_home(agent.name, is_home)
 
     def _print_status(self):
         alive = [a for a in self.agents if a.status == AgentStatus.ALIVE]
@@ -644,10 +1393,15 @@ class AICity:
 
         console.print(table)
         vault = token_engine.get_vault_state()
+        standing = self.asset_system.get_standing_assets() if self.asset_system else []
+        asset_str = (
+            " | Assets: " + ", ".join(f"{a['name']}" for a in standing)
+            if standing else ""
+        )
         console.print(
             f"City Stats: [green]{len(alive)} alive[/green], "
             f"[red]{len(dead)} dead[/red] | "
-            f"Vault: {vault['vault_balance']:,} tokens\n"
+            f"Vault: {vault['vault_balance']:,} tokens{asset_str}\n"
         )
 
     # ─── Run ──────────────────────────────────────────────────────────────────

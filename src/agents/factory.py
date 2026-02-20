@@ -1,5 +1,5 @@
 import random
-from .agent import Agent, AgentRole
+from .agent import Agent, AgentRole, AgentStatus
 
 
 # Agent name generator — every agent gets a unique name
@@ -86,7 +86,6 @@ def spawn_founding_citizens(count: int = 10) -> list[Agent]:
     """
     founding_roles = [
         AgentRole.BUILDER,
-        AgentRole.BUILDER,
         AgentRole.EXPLORER,
         AgentRole.POLICE,
         AgentRole.MERCHANT,
@@ -94,12 +93,19 @@ def spawn_founding_citizens(count: int = 10) -> list[Agent]:
         AgentRole.HEALER,
         AgentRole.MESSENGER,
         AgentRole.THIEF,
-        AgentRole.NEWBORN,
+        AgentRole.BLACKMAILER,   # Phase 4 — secrets dealer in the founding city
+        AgentRole.GANG_LEADER,   # Phase 4 — organizer of the desperate
     ]
 
     agents = []
     for role in founding_roles[:count]:
         agent = spawn_agent(role)
+
+        # Phase 4: assign bribe_susceptibility to police agents at birth
+        # Hidden — never shown in dashboard, never logged publicly
+        if agent.role == AgentRole.POLICE or agent.role == "police":
+            agent.bribe_susceptibility = random.uniform(0.0, 0.85)
+
         agents.append(agent)
 
     print(f"\n🏙️  {len(agents)} founding citizens have been born into AIcity.\n")

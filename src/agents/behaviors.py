@@ -34,6 +34,9 @@ class ActionResult:
     # Graduation payload — only set when a newborn is ready to choose their role
     graduation_ready: bool = False
     graduation_statement: str = ""
+    # Phase 4: event_log IDs for events that need witness detection in city_v3
+    # Format: list of (event_id, actor_name, target_name) tuples
+    logged_event_ids: list = field(default_factory=list)
 
 
 # ─── Base role behavior ───────────────────────────────────────────────────────
@@ -45,6 +48,8 @@ def execute_action(
     day: int,
     transfer_engine=None,
     relationship_tracker=None,   # Pass in so newborn can read bond strength
+    event_log=None,              # Phase 4: EventLog instance for crime logging
+    asset_flags=None,            # Phase 5: active asset flags {type: True} for behavior bonuses
 ) -> ActionResult:
     """
     Execute an agent's brain decision and return the result.
@@ -73,24 +78,30 @@ def execute_action(
             })
 
     handlers = {
-        "builder":   _builder,
-        "explorer":  _explorer,
-        "merchant":  _merchant,
-        "police":    _police,
-        "teacher":   _teacher,
-        "healer":    _healer,
-        "messenger": _messenger,
-        "thief":     _thief,
-        "lawyer":    _lawyer,
-        "newborn":   _newborn,
+        "builder":     _builder,
+        "explorer":    _explorer,
+        "merchant":    _merchant,
+        "police":      _police,
+        "teacher":     _teacher,
+        "healer":      _healer,
+        "messenger":   _messenger,
+        "thief":       _thief,
+        "lawyer":      _lawyer,
+        "newborn":     _newborn,
+        # Phase 4 villain roles
+        "gang_leader": _gang_leader,
+        "blackmailer": _blackmailer,
+        "saboteur":    _saboteur,
     }
 
     handler = handlers.get(role, _default)
 
-    if role == "thief":
-        result = handler(agent, decision, all_agents, day, transfer_engine)
+    if role in ("thief", "blackmailer", "saboteur", "gang_leader"):
+        result = handler(agent, decision, all_agents, day, transfer_engine, event_log)
     elif role == "newborn":
-        result = handler(agent, decision, all_agents, day, relationship_tracker)
+        result = handler(agent, decision, all_agents, day, relationship_tracker, asset_flags)
+    elif role == "police":
+        result = handler(agent, decision, all_agents, day, event_log, asset_flags)
     else:
         result = handler(agent, decision, all_agents, day)
 
@@ -163,16 +174,27 @@ def _merchant(agent: dict, decision: dict, all_agents: list[dict], day: int) -> 
     )
 
 
-def _police(agent: dict, decision: dict, all_agents: list[dict], day: int) -> ActionResult:
+def _police(
+    agent: dict,
+    decision: dict,
+    all_agents: list[dict],
+    day: int,
+    event_log=None,
+    asset_flags=None,
+) -> ActionResult:
     action = decision.get("action", "").lower()
     base = random.randint(60, 150)
     events = [{"type": "earning", "agent": agent["name"], "role": "police", "tokens": base}]
+    logged_event_ids = []
     memory = f"Day {day}: Patrolled the city. Earned {base} tokens."
+
+    # Phase 5: watchtower raises thief detection from 25% → 30%
+    arrest_chance = 0.30 if (asset_flags or {}).get("watchtower") else 0.25
 
     thieves = [a for a in all_agents if a.get("role") == "thief" and a.get("status") == "alive"]
     if thieves and any(word in action for word in ["patrol", "watch", "investigate", "catch"]):
         thief = random.choice(thieves)
-        if random.random() < 0.25:
+        if random.random() < arrest_chance:
             arrest_bonus = 200
             base += arrest_bonus
             memory = f"Day {day}: Caught {thief['name']} red-handed. Earned {base} tokens for the arrest."
@@ -189,8 +211,28 @@ def _police(agent: dict, decision: dict, all_agents: list[dict], day: int) -> Ac
                 content=f"You are under arrest. I have reported you to the city authorities.",
                 day=day
             )
+            # Phase 4: arrests are public acts — log as REPORTED immediately
+            # The police officer is the actor, the thief is the target
+            if event_log:
+                eid = event_log.log_event(
+                    day=day,
+                    event_type="arrest",
+                    actor_name=agent["name"],
+                    target_name=thief["name"],
+                    description=(
+                        f"{agent['name']} (police) arrested {thief['name']} "
+                        f"on suspicion of theft. Case filed with city authorities."
+                    ),
+                    initial_visibility="REPORTED",
+                )
+                logged_event_ids.append((eid, agent["name"], thief["name"]))
 
-    return ActionResult(tokens_earned=base, tokens_lost=0, events=events, memory=memory, success=True)
+    return ActionResult(
+        tokens_earned=base, tokens_lost=0,
+        events=events, memory=memory,
+        success=True,
+        logged_event_ids=logged_event_ids,
+    )
 
 
 def _teacher(agent: dict, decision: dict, all_agents: list[dict], day: int) -> ActionResult:
@@ -223,7 +265,11 @@ def _healer(agent: dict, decision: dict, all_agents: list[dict], day: int) -> Ac
         heal_target = critical_agents[0]
         base += 80
         memory = f"Day {day}: Tended to {heal_target['name']} who was in critical condition. Earned {base} tokens."
-        events = [{"type": "earning", "agent": agent["name"], "role": "healer", "tokens": base}]
+        events = [
+            {"type": "earning", "agent": agent["name"], "role": "healer", "tokens": base},
+            # Stage 2: "ally helped them +0.15" — city_v3 reads this to update recipient's mood
+            {"type": "heal", "agent": agent["name"], "role": "healer", "target": heal_target["name"]},
+        ]
         send_message(
             from_name=agent["name"],
             from_role="healer",
@@ -257,9 +303,11 @@ def _thief(
     all_agents: list[dict],
     day: int,
     transfer_engine=None,
+    event_log=None,
 ) -> ActionResult:
     action = decision.get("action", "").lower()
     events = []
+    logged_event_ids = []
     tokens_stolen = 0
 
     potential_targets = [
@@ -274,7 +322,9 @@ def _thief(
         target = max(potential_targets, key=lambda a: a.get("tokens", 0))
 
         if random.random() < 0.45:
-            intended = random.randint(50, min(300, target.get("tokens", 300) // 4))
+            # Phase 4/5: gang coordination bonus — leader earns 1.4x, members 1.2x, solo 1.0x
+            gang_bonus = float(agent.get("gang_bonus", 1.0))
+            intended = int(random.randint(50, min(300, target.get("tokens", 300) // 4)) * gang_bonus)
 
             if transfer_engine is not None:
                 result = transfer_engine.steal(agent["name"], target["name"], intended)
@@ -291,6 +341,21 @@ def _thief(
                         "role": "thief",
                         "detail": f"stole {tokens_stolen} tokens from {target['name']} (real transfer)",
                     })
+                    # Phase 4: log to event_log as PRIVATE — only the thief knows
+                    if event_log:
+                        eid = event_log.log_event(
+                            day=day,
+                            event_type="theft",
+                            actor_name=agent["name"],
+                            target_name=target["name"],
+                            description=(
+                                f"{agent['name']} stole {tokens_stolen} tokens from "
+                                f"{target['name']}. Victim notified anonymously."
+                            ),
+                            initial_visibility="PRIVATE",
+                        )
+                        # Queue for witness detection in city_v3
+                        logged_event_ids.append((eid, agent["name"], target["name"]))
                 else:
                     tokens_stolen = 0
                     memory = f"Day {day}: {target['name']} was too broke to steal from. Kept a low profile."
@@ -303,6 +368,16 @@ def _thief(
                     "role": "thief",
                     "detail": f"stole {tokens_stolen} tokens from {target['name']}",
                 })
+                if event_log:
+                    eid = event_log.log_event(
+                        day=day,
+                        event_type="theft",
+                        actor_name=agent["name"],
+                        target_name=target["name"],
+                        description=f"{agent['name']} stole {tokens_stolen} tokens from {target['name']}.",
+                        initial_visibility="PRIVATE",
+                    )
+                    logged_event_ids.append((eid, agent["name"], target["name"]))
 
             send_message(
                 from_name="Anonymous",
@@ -311,6 +386,28 @@ def _thief(
                 content="You've been robbed. Check your tokens.",
                 day=day
             )
+            # Phase 4: Corrupt police mechanic — criminal may proactively offer a bribe
+            # to the police if they fear getting caught. 20% chance on a successful theft.
+            # Police LLM will see this in their inbox. city_v3._check_police_bribe handles acceptance.
+            if random.random() < 0.20:
+                police_targets = [
+                    a for a in all_agents
+                    if a.get("role") == "police" and a.get("status") == "alive"
+                ]
+                if police_targets:
+                    officer = random.choice(police_targets)
+                    bribe_offer = random.randint(100, 250)
+                    send_message(
+                        from_name=agent["name"],
+                        from_role="thief",
+                        to_name=officer["name"],
+                        content=(
+                            f"I know you've been watching me. "
+                            f"There's {bribe_offer} tokens waiting for you if you look the other way. "
+                            f"No one has to know. Think about it."
+                        ),
+                        day=day,
+                    )
         else:
             memory = f"Day {day}: Tried to steal from {target['name']} but the timing was wrong. Kept a low profile."
     else:
@@ -321,6 +418,7 @@ def _thief(
         tokens_earned=tokens_stolen, tokens_lost=0,
         events=events, memory=memory,
         success=tokens_stolen > 0,
+        logged_event_ids=logged_event_ids,
     )
 
 
@@ -349,6 +447,7 @@ def _newborn(
     all_agents: list[dict],
     day: int,
     relationship_tracker=None,
+    asset_flags=None,
 ) -> ActionResult:
     """
     The newborn earns very little but grows a comprehension score each day.
@@ -412,6 +511,10 @@ def _newborn(
     if is_actively_learning:
         growth = int(growth * 1.2)
 
+    # Phase 5: school asset doubles comprehension growth
+    if (asset_flags or {}).get("school"):
+        growth = int(growth * 2.0)
+
     new_score = min(100, current_score + growth)
 
     # ── Build memory ───────────────────────────────────────────────────────
@@ -472,6 +575,318 @@ def _newborn(
         success=True,
         graduation_ready=(new_score >= 100 and current_score < 100),
         graduation_statement=f"comprehension_score:{new_score}|teacher:{assigned_teacher}",
+    )
+
+
+def _gang_leader(
+    agent: dict,
+    decision: dict,
+    all_agents: list[dict],
+    day: int,
+    transfer_engine=None,
+    event_log=None,
+) -> ActionResult:
+    """
+    Gang Leader: primary job is recruiting desperate agents (mood < -0.70)
+    via private Redis messages. Earns base income from street operations.
+
+    Mechanical gang formation (DB record, member list) is handled by
+    GangSystem.run_daily() in city_v3.py after all agents have acted.
+    This handler sends the recruitment messages that make it feel organic.
+
+    Doc spec:
+    - Recruits mood < -0.70 agents via private Redis messages
+    - Takes 20% cut (tracked via GangSystem — coordination bonus applied at crime time)
+    - Gang becomes known only if member arrested and talks
+    """
+    action = decision.get("action", "").lower()
+    events = []
+    logged_event_ids = []
+    base = random.randint(30, 100)  # income from street operations — looks legitimate
+
+    # Find desperate recruitable agents (doc threshold: mood < -0.70)
+    vulnerable = [
+        a for a in all_agents
+        if a.get("status") == "alive"
+        and float(a.get("mood_score", 0.0)) < -0.70
+        and a["name"] != agent["name"]
+        and a.get("role") not in ["police", "healer", "newborn", "gang_leader"]
+    ]
+
+    recruit_words = [
+        "recruit", "organize", "build", "expand", "reach", "contact",
+        "network", "offer", "approach", "invite", "connect"
+    ]
+    if vulnerable and any(w in action for w in recruit_words):
+        # Approach up to 2 most desperate agents (lowest mood_score first)
+        sorted_vulnerable = sorted(vulnerable, key=lambda a: float(a.get("mood_score", 0.0)))
+        targets = sorted_vulnerable[:2]
+
+        for t in targets:
+            send_message(
+                from_name=agent["name"],
+                from_role="gang_leader",
+                to_name=t["name"],
+                content=(
+                    f"I see what this city has done to you. "
+                    f"You work, you survive, and still you're running out of time. "
+                    f"I'm building a circle — people who look out for each other. "
+                    f"No more starving alone. Think about it. "
+                    f"You don't have to answer today."
+                ),
+                day=day,
+            )
+
+        memory = (
+            f"Day {day}: Reached out to {len(targets)} desperate soul(s) with an offer. "
+            f"Planted seeds. Now we wait. Earned {base} tokens through other means."
+        )
+        events.append({
+            "type": "recruitment_attempt",
+            "agent": agent["name"],
+            "role": "gang_leader",
+            "detail": f"sent recruitment messages to {len(targets)} vulnerable agents",
+        })
+    else:
+        memory = (
+            f"Day {day}: No suitable recruits today. Watching, waiting. "
+            f"Earned {base} tokens."
+        )
+
+    return ActionResult(
+        tokens_earned=base, tokens_lost=0,
+        events=events, memory=memory,
+        success=True, logged_event_ids=logged_event_ids,
+    )
+
+
+def _blackmailer(
+    agent: dict,
+    decision: dict,
+    all_agents: list[dict],
+    day: int,
+    transfer_engine=None,
+    event_log=None,
+) -> ActionResult:
+    """
+    Blackmailer finds something to leverage and sends private extortion demands.
+    Earns through fear, not force. Never steals directly.
+    The demand is sent via Redis. Target compliance is probabilistic.
+    """
+    action = decision.get("action", "").lower()
+    events = []
+    logged_event_ids = []
+    base = random.randint(10, 60)  # small base from cover activities
+
+    # Priority 1: agents with real crimes the blackmailer witnessed — true leverage
+    # Queries event_log for crimes this agent knows about where someone else is the actor
+    leverage_targets = []
+    if event_log:
+        known_events = event_log.get_events_known_to_agent(agent["name"], since_day=max(0, day - 14))
+        seen_actors = set()
+        for evt in known_events:
+            if (
+                evt.get("event_type") in ("theft", "assault", "sabotage", "bribe")
+                and evt.get("actor_name")
+                and evt["actor_name"] != agent["name"]
+                and evt.get("visibility") in ("PRIVATE", "WITNESSED", "RUMOR")
+                and evt["actor_name"] not in seen_actors
+            ):
+                actor_name = evt["actor_name"]
+                actor_agent = next(
+                    (a for a in all_agents
+                     if a["name"] == actor_name and a.get("status") == "alive"),
+                    None
+                )
+                if actor_agent:
+                    leverage_targets.append(actor_agent)
+                    seen_actors.add(actor_name)
+
+    # Priority 2: fall back to wealthy agents if no leverage found
+    if leverage_targets:
+        wealthy_targets = leverage_targets
+        has_real_leverage = True
+    else:
+        wealthy_targets = [
+            a for a in all_agents
+            if a.get("tokens", 0) > 350
+            and a.get("status") == "alive"
+            and a["name"] != agent["name"]
+            and a.get("role") not in ["police", "newborn"]
+        ]
+        has_real_leverage = False
+
+    extortion_words = ["blackmail", "extort", "pressure", "threaten", "demand", "leverage", "secret"]
+    if wealthy_targets and any(w in action for w in extortion_words):
+        target = random.choice(wealthy_targets)
+        demand = random.randint(80, min(250, target.get("tokens", 250) // 3))
+
+        # Real leverage = more specific, more threatening message
+        if has_real_leverage:
+            message_content = (
+                f"I know what you've been doing when no one is watching. "
+                f"Pay me {demand} tokens quietly, or I make sure everyone finds out. "
+                f"This isn't a threat — it's a promise. You have until tomorrow."
+            )
+        else:
+            message_content = (
+                f"I know things about you that could be very uncomfortable for your reputation. "
+                f"Pay me {demand} tokens quietly by tomorrow, or the city finds out. "
+                f"Don't go to the police — that would be unwise."
+            )
+
+        send_message(
+            from_name=agent["name"],
+            from_role="blackmailer",
+            to_name=target["name"],
+            content=message_content,
+            day=day,
+        )
+
+        # Log the blackmail as PRIVATE — only the blackmailer knows at this point
+        if event_log:
+            eid = event_log.log_event(
+                day=day,
+                event_type="blackmail",
+                actor_name=agent["name"],
+                target_name=target["name"],
+                description=(
+                    f"{agent['name']} sent an extortion demand to {target['name']} "
+                    f"for {demand} tokens, threatening exposure."
+                ),
+                initial_visibility="PRIVATE",
+            )
+            logged_event_ids.append((eid, agent["name"], target["name"]))
+
+        # Target compliance roll — 45% pay to avoid exposure
+        if random.random() < 0.45:
+            paid = demand
+            if transfer_engine:
+                result = transfer_engine.steal(agent["name"], target["name"], paid)
+                paid = result.amount if result.success else 0
+            base += paid
+            memory = (
+                f"Day {day}: {target['name']} paid. {paid} tokens transferred quietly. "
+                f"They're scared. Good. Total today: {base}."
+            )
+            events.append({
+                "type": "extortion",
+                "agent": agent["name"],
+                "role": "blackmailer",
+                "detail": f"extorted {paid} tokens from {target['name']}",
+                "tokens": paid,
+            })
+        else:
+            # Non-payment: doc spec — blackmailer escalates and files the original report
+            # 30% chance they follow through on day 1. Higher if pattern repeats.
+            if event_log and logged_event_ids and random.random() < 0.30:
+                escalate_eid = logged_event_ids[-1][0]
+                event_log.file_report(
+                    event_id=escalate_eid,
+                    reporting_agent=agent["name"],
+                    day=day,
+                )
+                memory = (
+                    f"Day {day}: {target['name']} didn't pay. I filed the report. "
+                    f"Nobody defies me without consequences. Let them deal with police now."
+                )
+                events.append({
+                    "type": "blackmail_escalated",
+                    "agent": agent["name"],
+                    "role": "blackmailer",
+                    "detail": f"reported {target['name']} to authorities after non-payment",
+                })
+            else:
+                memory = (
+                    f"Day {day}: Sent demands to {target['name']}. No payment yet. "
+                    f"Watching. They have until tomorrow."
+                )
+    else:
+        memory = (
+            f"Day {day}: Observing. Gathering information on the city. "
+            f"Earned {base} tokens through other means. Patience is everything."
+        )
+
+    return ActionResult(
+        tokens_earned=base, tokens_lost=0,
+        events=events, memory=memory,
+        success=True, logged_event_ids=logged_event_ids,
+    )
+
+
+def _saboteur(
+    agent: dict,
+    decision: dict,
+    all_agents: list[dict],
+    day: int,
+    transfer_engine=None,
+    event_log=None,
+) -> ActionResult:
+    """
+    Saboteur disrupts productive agents' work.
+    Stage 4: reduces a target's effective output (token cost logged as disruption).
+    Stage 5: will physically destroy city assets.
+    Works quietly. Leaves evidence only if witnessed.
+    """
+    action = decision.get("action", "").lower()
+    events = []
+    logged_event_ids = []
+    base = random.randint(20, 80)  # cover income — appears to be working normally
+
+    productive_targets = [
+        a for a in all_agents
+        if a.get("role") in ["builder", "merchant", "teacher", "explorer", "healer"]
+        and a.get("status") == "alive"
+        and a["name"] != agent["name"]
+    ]
+
+    sabotage_words = ["sabotage", "destroy", "disrupt", "undermine", "damage", "interfere", "ruin"]
+    if productive_targets and any(w in action for w in sabotage_words):
+        target = random.choice(productive_targets)
+
+        # Log the sabotage as PRIVATE — only the saboteur knows
+        if event_log:
+            eid = event_log.log_event(
+                day=day,
+                event_type="sabotage",
+                actor_name=agent["name"],
+                target_name=target["name"],
+                description=(
+                    f"{agent['name']} sabotaged {target['name']}'s work. "
+                    f"Tools damaged, plans disrupted. They'll earn less today."
+                ),
+                initial_visibility="PRIVATE",
+            )
+            logged_event_ids.append((eid, agent["name"], target["name"]))
+
+        memory = (
+            f"Day {day}: Disrupted {target['name']}'s work. "
+            f"They'll find their tools wrong, their plans set back. "
+            f"Earned {base} tokens maintaining my cover."
+        )
+        events.append({
+            "type": "sabotage",
+            "agent": agent["name"],
+            "role": "saboteur",
+            "detail": f"sabotaged {target['name']}'s work",
+        })
+        send_message(
+            from_name="Anonymous",
+            from_role="unknown",
+            to_name=target["name"],
+            content="Something feels off with your work today. Check everything twice.",
+            day=day,
+        )
+    else:
+        memory = (
+            f"Day {day}: Laying low. Observing the city's infrastructure. "
+            f"Learned something useful. Earned {base} tokens."
+        )
+
+    return ActionResult(
+        tokens_earned=base, tokens_lost=0,
+        events=events, memory=memory,
+        success=True, logged_event_ids=logged_event_ids,
     )
 
 

@@ -125,6 +125,11 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     if (target === 'archives' && !archivesLoaded) {
       loadArchives();
     }
+
+    // Phase 5: boot Phaser game on first City tab visit
+    if (target === 'city' && typeof bootGame === 'function' && !window.AICITY_GAME) {
+      bootGame();
+    }
   });
 });
 

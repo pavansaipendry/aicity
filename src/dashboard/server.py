@@ -97,6 +97,17 @@ async def websocket_endpoint(ws: WebSocket):
     try:
         # Send current state immediately on connect
         await ws.send_text(json.dumps({"type": "state", "data": city_state}))
+        # Phase 5: also send last known positions and time phase on reconnect
+        if city_state.get("last_positions"):
+            await ws.send_text(json.dumps({
+                "type": "positions",
+                "agents": city_state["last_positions"]
+            }))
+        if city_state.get("last_time_phase"):
+            await ws.send_text(json.dumps({
+                "type": "time_phase",
+                "phase": city_state["last_time_phase"]
+            }))
         while True:
             await asyncio.sleep(30)
     except WebSocketDisconnect:
@@ -117,6 +128,13 @@ async def receive_event(request: Request):
             city_state[k] = v
         if "relationships" in data:
             city_state["relationships"] = data["relationships"]
+
+    # Phase 5: cache latest positions + time phase for reconnecting clients
+    elif event_type == "positions":
+        city_state["last_positions"] = event.get("agents", [])
+
+    elif event_type == "time_phase":
+        city_state["last_time_phase"] = event.get("phase", "morning")
 
     elif event_type == "agent_update":
         agent = event.get("agent", {})
@@ -147,7 +165,9 @@ async def receive_event(request: Request):
         pass  # agent_update will populate it
 
     # ── Persist feed events so they survive a page refresh ──────────────────
-    if event_type not in ("state", "agent_update"):
+    # Phase 5: skip high-frequency position/phase events from feed storage
+    _SKIP_FEED = {"state", "agent_update", "positions", "time_phase"}
+    if event_type not in _SKIP_FEED:
         entry = {**event, "day": event.get("day") or city_state.get("day", 0)}
         events = city_state.setdefault("events", [])
         events.insert(0, entry)

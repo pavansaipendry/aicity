@@ -18,6 +18,10 @@ class AgentRole(str, Enum):
     LAWYER = "lawyer"
     THIEF = "thief"
     NEWBORN = "newborn"
+    # Phase 4 villain roles
+    GANG_LEADER = "gang_leader"
+    BLACKMAILER = "blackmailer"
+    SABOTEUR = "saboteur"
 
 
 class AgentStatus(str, Enum):
@@ -84,6 +88,23 @@ class Agent(BaseModel):
     assigned_teacher: Optional[str] = None
 
     exiled_until: float = 0.0
+
+    # Phase 4: system-tracked emotional state (-1.0 = rock bottom, +1.0 = thriving)
+    # Updated by real events — theft, healing, justice, survival stress, etc.
+    # Feeds into LLM brain prompts as rich descriptive context.
+    # At < -0.70: susceptible to gang recruitment.
+    mood_score: float = 0.0
+
+    # Phase 4: hidden corruption score for police agents only (0.0 = incorruptible, 1.0 = fully corrupt)
+    # Never logged publicly, never shown in dashboard. Set at birth, drifts over time.
+    bribe_susceptibility: float = 0.0
+
+    # Phase 5: position tracking (tile coordinates, float for smooth movement interpolation)
+    x: float = 0.0
+    y: float = 0.0
+    home_tile_x: int = 0
+    home_tile_y: int = 0
+    home_claimed: bool = False
 
     model_config = ConfigDict(use_enum_values=True)
 
