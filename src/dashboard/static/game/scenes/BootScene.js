@@ -49,11 +49,19 @@ class BootScene extends Phaser.Scene {
     this.load.image('nature',    '/static/game/assets/tilesets/nature.png');
 
     // ── Placeholder agent sprite ───────────────────────────────────────────
-    // A simple 8×8 white square — tinted per role in CityScene (Sprint 3)
-    const agentCanvas = this.textures.createCanvas('agent_placeholder', 8, 8);
+    // 16×16 circle — tinted per role in AgentManager (Sprint 3)
+    const agentCanvas = this.textures.createCanvas('agent_placeholder', 16, 16);
     const ctx = agentCanvas.getContext();
+    ctx.clearRect(0, 0, 16, 16);
+    // Filled circle
+    ctx.beginPath();
+    ctx.arc(8, 8, 7, 0, Math.PI * 2);
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, 8, 8);
+    ctx.fill();
+    // Dark outline for contrast over any tile colour
+    ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
     agentCanvas.refresh();
   }
 

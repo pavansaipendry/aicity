@@ -55,6 +55,7 @@ let allStories      = [];
 let currentFiltered = [];
 let archivesLoaded  = false;
 let unreadDispatches = 0;
+let _msgHistory     = [];   // raw message events for fullscreen chat replay
 
 // ── Particles ─────────────────────────────────────────────────────────────────
 const canvas = document.getElementById('particles');
@@ -710,6 +711,7 @@ function rebuildMessages(messages) {
 
   // Server sends newest-first; render oldest-first so newest ends up at top
   const toRender = [...messages].reverse().slice(-MAX_MSGS);
+  _msgHistory = [...toRender];   // keep a raw copy for fullscreen chat
   toRender.forEach(ev => {
     const item = buildMessageEl(ev);
     list.insertBefore(item, list.firstChild);
@@ -731,6 +733,11 @@ function addMessage(event) {
   const item = buildMessageEl(event);
   list.insertBefore(item, list.firstChild);
   while (list.children.length > MAX_MSGS) list.removeChild(list.lastChild);
+
+  // Keep raw history for fullscreen chat
+  _msgHistory.push(event);
+  if (_msgHistory.length > MAX_MSGS) _msgHistory.shift();
+  if (isCityFullscreen()) addFsChatLine(event);
 }
 
 function buildMessageEl(event) {
@@ -899,6 +906,83 @@ function _positionTooltip(e) {
 document.addEventListener('mousemove', e => {
   if (_tipVisible) _positionTooltip(e);
 });
+
+// ── City Fullscreen ───────────────────────────────────────────────────────────
+
+function isCityFullscreen() {
+  return document.getElementById('city-fullscreen-overlay').classList.contains('active');
+}
+
+function enterCityFullscreen() {
+  const overlay    = document.getElementById('city-fullscreen-overlay');
+  const fsLeft     = document.getElementById('city-fs-left');
+  const gameCanvas = document.getElementById('game-canvas');
+
+  // Move Phaser container into the left panel
+  fsLeft.appendChild(gameCanvas);
+  overlay.classList.add('active');
+
+  // Boot game if City tab hasn't been visited yet
+  if (typeof bootGame === 'function' && !window.AICITY_GAME) {
+    bootGame();
+  }
+
+  // Populate chat from history
+  rebuildFsChat();
+}
+
+function exitCityFullscreen() {
+  const overlay    = document.getElementById('city-fullscreen-overlay');
+  const tabCity    = document.getElementById('tab-city');
+  const gameCanvas = document.getElementById('game-canvas');
+
+  tabCity.appendChild(gameCanvas);
+  overlay.classList.remove('active');
+}
+
+// ESC exits fullscreen
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && isCityFullscreen()) exitCityFullscreen();
+});
+
+function _getRoleForSender(name) {
+  const a = state.agents.find(ag => ag.name === name);
+  return a ? (a.role || 'unknown') : 'unknown';
+}
+
+function addFsChatLine(event) {
+  const chat = document.getElementById('city-fs-chat');
+  if (!chat) return;
+  const empty = chat.querySelector('.empty-state');
+  if (empty) empty.remove();
+
+  const role = _getRoleForSender(event.from || '');
+  const item = document.createElement('div');
+  item.className = 'fs-msg';
+  item.innerHTML = `
+    <div class="fs-msg-meta">
+      Day ${event.day || state.day} &middot;
+      <span class="fs-msg-sender">${event.from || '?'}</span>
+      <span class="fs-msg-role"> (${role})</span>
+      &rarr;
+      <span class="fs-msg-to">${event.to || '?'}</span>
+    </div>
+    <div class="fs-msg-body">${event.content || ''}</div>`;
+  chat.appendChild(item);
+  chat.scrollTop = chat.scrollHeight;
+  while (chat.children.length > 100) chat.removeChild(chat.firstChild);
+}
+
+function rebuildFsChat() {
+  const chat = document.getElementById('city-fs-chat');
+  if (!chat) return;
+  chat.innerHTML = '';
+  if (!_msgHistory.length) {
+    chat.innerHTML = '<div class="empty-state"><div class="empty-dot"></div><div>No conversations yet.</div></div>';
+    return;
+  }
+  _msgHistory.forEach(ev => addFsChatLine(ev));
+}
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 connect();

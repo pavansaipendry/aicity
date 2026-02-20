@@ -45,6 +45,8 @@
       </div>
     </div>
 
+    <button id="fs-tab-btn" class="fs-enter-btn" onclick="enterCityFullscreen()" title="City fullscreen + live conversations">&#x26F6; FULLSCREEN</button>
+
     <div id="ws-status">
       <div id="ws-dot"></div>
       <span id="ws-label">CONNECTING</span>
@@ -186,6 +188,20 @@
   </aside>
 </div>
 
+<!-- ── City fullscreen overlay ──────────────────────────────────────── -->
+<div id="city-fullscreen-overlay">
+  <div id="city-fs-left"></div>
+  <div id="city-fs-right">
+    <div class="city-fs-header">
+      <span class="city-fs-title">Live Conversations</span>
+      <button class="city-fs-exit" onclick="exitCityFullscreen()">[ EXIT ]</button>
+    </div>
+    <div id="city-fs-chat">
+      <div class="empty-state"><div class="empty-dot"></div><div>Waiting for messages...</div></div>
+    </div>
+  </div>
+</div>
+
 <!-- ── Graduation overlay ─────────────────────────────────────────────── -->
 <div id="graduation-overlay">
   <div class="graduation-box">
@@ -229,9 +245,16 @@
 <!-- Data files must load before scenes -->
 <script src="/static/game/data/zones.js"></script>
 <script src="/static/game/data/roleConfig.js"></script>
+<!-- Systems (Sprint 3+) -->
+<script src="/static/game/systems/AgentManager.js"></script>
+<!-- Systems (Sprint 4) -->
+<script src="/static/game/systems/DayNight.js"></script>
+<script src="/static/game/systems/EventAnimator.js"></script>
+<script src="/static/game/systems/MapManager.js"></script>
 <!-- Scenes -->
 <script src="/static/game/scenes/BootScene.js"></script>
 <script src="/static/game/scenes/CityScene.js"></script>
+<script src="/static/game/scenes/UIScene.js"></script>
 <!-- Boot -->
 <script src="/static/game/main.js"></script>
 </body>

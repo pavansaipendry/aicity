@@ -29,11 +29,16 @@ class CityScene extends Phaser.Scene {
     this._dragStart  = { x: 0, y: 0 };
     this._camStart   = { scrollX: 0, scrollY: 0 };
 
-    // Agent sprites map: name → { sprite, label }  (populated in Sprint 3)
-    this.agentSprites = new Map();
+    // Phase 5 Sprint 3: AgentManager handles all sprite creation + movement
+    this.agentManager = null;
 
     // Day/Night overlay (Sprint 4)
     this.skyOverlay  = null;
+
+    // Sprint 4: visual systems
+    this.dayNight      = null;
+    this.eventAnimator = null;
+    this.mapManager    = null;
 
     // Last received time phase
     this.timePhase = 'morning';
@@ -48,19 +53,25 @@ class CityScene extends Phaser.Scene {
     this._buildZoneDebugOverlay();
     this._buildHUD();
     this._setupCameraControls();
+
+    // Sprint 3: AgentManager — spawns and moves agent sprites
+    this.agentManager = new AgentManager(this);
+
+    // Sprint 4: visual systems (constructed after skyOverlay and agentManager exist)
+    this.dayNight      = new DayNight(this);
+    this.eventAnimator = new EventAnimator(this);
+    this.mapManager    = new MapManager(this);
+
     this._setupWebSocket();
+
+    // Launch UIScene overlay on top of this scene
+    this.scene.launch('UIScene');
 
     console.log('[AIcity] CityScene ready. World: %dx%d px', WORLD_W, WORLD_H);
   }
 
   update() {
-    // Label positions follow sprites (Sprint 3 will call per-agent update)
-    this.agentSprites.forEach(({ sprite, label }) => {
-      if (label) {
-        label.x = sprite.x;
-        label.y = sprite.y - 10;
-      }
-    });
+    if (this.agentManager) this.agentManager.update();
   }
 
   // ── Tilemap ───────────────────────────────────────────────────────────────
@@ -254,72 +265,75 @@ class CityScene extends Phaser.Scene {
 
       // ── State: initial snapshot on connect ──────────────────────────────
       case 'state':
-        console.log('[AIcity] state — day', event.data?.day, '— agents:', event.data?.agents?.length);
         if (this._hudDay) this._hudDay.setText(`Day ${event.data?.day ?? '—'}`);
-        // Sprint 3: this.agentManager.initFromState(event.data);
+        if (this.agentManager) this.agentManager.initFromState(event.data);
+        console.log('[AIcity] state — day', event.data?.day, '— agents:', event.data?.agents?.length);
         break;
 
       // ── Positions: agents move ───────────────────────────────────────────
       case 'positions':
-        // Sprint 3: this.agentManager.updatePositions(event.agents);
-        console.log('[AIcity] positions update —', event.agents?.length, 'agents');
+        if (this.agentManager) this.agentManager.updatePositions(event.agents);
         break;
 
       // ── Time phase: dawn / morning / afternoon / evening / night ─────────
       case 'time_phase':
         this.timePhase = event.phase;
         if (this._hudPhase) this._hudPhase.setText(`Phase: ${event.phase}`);
+        if (this.agentManager) this.agentManager.onTimePhase(event.phase);
+        if (this.dayNight)     this.dayNight.setPhase(event.phase);  // Sprint 4
         console.log('[AIcity] time_phase →', event.phase);
-        // Sprint 4: this.dayNight.setPhase(event.phase);
-        this._applySimplePhaseColor(event.phase);
         break;
 
       // ── Per-agent update ─────────────────────────────────────────────────
       case 'agent_update':
-        // Sprint 3: this.agentManager.updateAgent(event.agent);
+        if (this.agentManager) this.agentManager.updateAgent(event.agent);
         break;
 
-      // ── Events with visual effects (Sprint 4) ───────────────────────────
+      // ── Events with visual effects ───────────────────────────────────────
       case 'theft':
+        if (this.eventAnimator) this.eventAnimator.playTheft(event);
         console.log('[AIcity] theft —', event.agent, '→', event.target);
-        // Sprint 4: this.eventAnimator.playTheft(event);
         break;
 
       case 'arrest':
+        if (this.eventAnimator) this.eventAnimator.playArrest(event);
         console.log('[AIcity] arrest —', event.agent, 'arrested', event.target);
         break;
 
       case 'death':
+        if (this.eventAnimator) this.eventAnimator.playDeath(event);  // BEFORE killAgent — sprite still exists
+        if (this.agentManager)  this.agentManager.killAgent(event.agent);
         console.log('[AIcity] death —', event.agent, '— cause:', event.cause);
-        // Sprint 4: this.eventAnimator.playDeath(event);
         break;
 
       case 'birth':
+        if (this.agentManager) this.agentManager.spawnAgent(event);
         console.log('[AIcity] birth — new agent:', event.agent, '(', event.role, ')');
-        // Sprint 3: this.agentManager.spawnAgent(event);
         break;
 
       case 'asset_built':
+        if (this.mapManager) this.mapManager.placeBuilding(event);
         console.log('[AIcity] asset_built —', event.project_name);
-        // Sprint 4: this.mapManager.placeBuilding(event);
         break;
 
       case 'home_claimed':
+        if (this.mapManager) this.mapManager.placeHome(event);
         console.log('[AIcity] home_claimed —', event.agent, 'at', event.lot_id);
-        // Sprint 4: this.mapManager.placeHome(event);
         break;
 
       case 'meeting':
+        if (this.eventAnimator) this.eventAnimator.playMeeting(event);
         console.log('[AIcity] meeting —', event.participants, 'at', event.location, '—', event.outcome);
-        // Sprint 4: this.eventAnimator.playMeeting(event);
         break;
 
       case 'gang_formed':
       case 'gang_event':
+        if (this.eventAnimator) this.eventAnimator.playGangForm(event);
         console.log('[AIcity] gang_event —', event);
         break;
 
       case 'heart_attack':
+        if (this.eventAnimator) this.eventAnimator.playHeartAttack(event);
         console.log('[AIcity] heart_attack —', event.agent);
         break;
 

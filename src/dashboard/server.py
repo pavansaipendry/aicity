@@ -8,11 +8,19 @@ Fixes:
 
 import asyncio
 import json
+import datetime
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from loguru import logger
+
+def _json_serial(obj):
+    """JSON serializer for objects not serializable by default json encoder."""
+    if isinstance(obj, (datetime.datetime, datetime.date)):
+        return obj.isoformat()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
 
 app = FastAPI(title="AIcity Dashboard")
 
@@ -96,18 +104,18 @@ async def websocket_endpoint(ws: WebSocket):
     connected_clients.add(ws)
     try:
         # Send current state immediately on connect
-        await ws.send_text(json.dumps({"type": "state", "data": city_state}))
+        await ws.send_text(json.dumps({"type": "state", "data": city_state}, default=_json_serial))
         # Phase 5: also send last known positions and time phase on reconnect
         if city_state.get("last_positions"):
             await ws.send_text(json.dumps({
                 "type": "positions",
                 "agents": city_state["last_positions"]
-            }))
+            }, default=_json_serial))
         if city_state.get("last_time_phase"):
             await ws.send_text(json.dumps({
                 "type": "time_phase",
                 "phase": city_state["last_time_phase"]
-            }))
+            }, default=_json_serial))
         while True:
             await asyncio.sleep(30)
     except WebSocketDisconnect:
@@ -187,7 +195,7 @@ async def broadcast(event: dict):
     global connected_clients
     if not connected_clients:
         return
-    msg = json.dumps(event)
+    msg = json.dumps(event, default=_json_serial)
     dead = set()
     for ws in connected_clients:
         try:

@@ -22,8 +22,7 @@ const GAME_CONFIG = {
     default: 'arcade',
     arcade: { debug: false },
   },
-  scene: [BootScene, CityScene],
-  // UIScene added in Sprint 3 when sprites are live
+  scene: [BootScene, CityScene, UIScene],
 };
 
 // Boot the game only when the City tab is first clicked (called from app.js).
