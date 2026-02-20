@@ -80,6 +80,22 @@ async def get_agents():
 async def get_newspaper():
     return city_state.get("last_newspaper", {})
 
+@app.get("/api/world")
+async def get_world():
+    """
+    Return all non-grass tiles for the Phase 6 isometric canvas.
+    Called once when the frontend boots; live changes come via WS tile_placed events.
+    """
+    try:
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from src.world.tile_manager import get_world_state
+        return get_world_state()
+    except Exception as e:
+        logger.warning(f"Could not load world state: {e}")
+        return []
+
+
 @app.get("/api/stories")
 async def get_stories():
     """Return all stories from DB for the stories tab."""
@@ -172,9 +188,15 @@ async def receive_event(request: Request):
     elif event_type == "birth":
         pass  # agent_update will populate it
 
+    # Phase 6: tile changes — just broadcast, no state caching needed
+    # (frontend fetches /api/world once on load, then applies incremental updates)
+    elif event_type in ("tile_placed", "construction_progress", "construction_complete"):
+        pass  # broadcast handles it below
+
     # ── Persist feed events so they survive a page refresh ──────────────────
     # Phase 5: skip high-frequency position/phase events from feed storage
-    _SKIP_FEED = {"state", "agent_update", "positions", "time_phase"}
+    _SKIP_FEED = {"state", "agent_update", "positions", "time_phase",
+                  "tile_placed", "construction_progress"}
     if event_type not in _SKIP_FEED:
         entry = {**event, "day": event.get("day") or city_state.get("day", 0)}
         events = city_state.setdefault("events", [])

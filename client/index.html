@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AIcity — Isometric View</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0a0a;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+    }
+    canvas {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <!-- PixiJS v8 injects its canvas here via app.canvas -->
+  <div id="pixi-root"></div>
+  <!-- Vite resolves TypeScript imports at build time -->
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

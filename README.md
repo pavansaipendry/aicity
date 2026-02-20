@@ -137,15 +137,19 @@ aicity/
 │   │           ├── systems/    # AgentManager, DayNight, EventAnimator, MapManager
 │   │           └── data/       # zones.js, roleConfig.js, citymap.json
 │   │
-│   └── migrations/
-│       ├── 001_initial_schema.sql
-│       ├── 002_newborn_comprehension.sql
-│       ├── 003_stories.sql
-│       ├── 004_event_log.sql
-│       ├── 005_mood.sql
-│       ├── 006_police_cases.sql
-│       ├── 007_villains.sql
-│       └── 008_city_infrastructure.sql
+│   ├── migrations/
+│   │   ├── 001_initial_schema.sql
+│   │   ├── 002_newborn_comprehension.sql
+│   │   ├── 003_stories.sql
+│   │   ├── 004_event_log.sql
+│   │   ├── 005_mood.sql
+│   │   ├── 006_police_cases.sql
+│   │   ├── 007_villains.sql
+│   │   ├── 008_city_infrastructure.sql
+│   │   └── 009_world_tiles.sql       # Phase 6 — isometric tile grid
+│   │
+│   └── world/
+│       └── tile_manager.py           # Phase 6 — tile CRUD + world generation
 │
 └── docs/
     ├── phase1/         # Setup, agent design, token rules
@@ -188,6 +192,7 @@ psql -d aicity -f src/migrations/005_mood.sql
 psql -d aicity -f src/migrations/006_police_cases.sql
 psql -d aicity -f src/migrations/007_villains.sql
 psql -d aicity -f src/migrations/008_city_infrastructure.sql
+psql -d aicity -f src/migrations/009_world_tiles.sql
 
 # 6. Start the dashboard (terminal 1)
 uvicorn src.dashboard.server:app --port 8000 --reload
@@ -197,6 +202,18 @@ python main_phase3.py
 ```
 
 Open `http://localhost:8000` — the dashboard loads automatically.
+
+### Phase 6 isometric canvas (Sprint 1 — in progress)
+
+```bash
+# In a third terminal — run the Vite dev server
+cd client
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173` — PixiJS isometric canvas with programmatic tile rendering.
+The canvas connects to the FastAPI backend at port 8000 via proxy.
 Click **City** tab to see the Phaser canvas.
 Click **⛶ FULLSCREEN** in the header to open the fullscreen city + conversation view.
 
