@@ -50,10 +50,14 @@ class HomeManager:
                 logger.debug("[HomeManager] No free lots left in the city.")
                 break
 
-            # Deduct tokens — use spend_tokens which logs and validates
-            paid = agent.spend_tokens(HOME_PURCHASE_COST, f"buying home {lot['id']}")
+            # Deduct through token_engine — single source of truth for all balances
+            if token_engine is None:
+                continue
+            paid = token_engine.spend(agent.id, HOME_PURCHASE_COST, "home_purchase")
             if not paid:
                 continue
+            # Sync in-memory balance with what token_engine now holds
+            agent.tokens = token_engine.get_balance(agent.id)
 
             # Record ownership
             lot["owner"] = agent.name
@@ -61,20 +65,8 @@ class HomeManager:
             agent.home_tile_y = lot["y"]
             agent.home_claimed = True
 
-            # Persist to DB
-            if token_engine is not None:
-                try:
-                    token_engine.conn.execute(
-                        """
-                        UPDATE agents
-                        SET home_tile_x = %s, home_tile_y = %s, home_claimed = TRUE
-                        WHERE name = %s
-                        """,
-                        (lot["x"], lot["y"], agent.name),
-                    )
-                    token_engine.conn.commit()
-                except Exception as e:
-                    logger.error(f"[HomeManager] DB update failed for {agent.name}: {e}")
+            # Persist home columns to DB (separate from token_engine's agent_balances table)
+            self._persist_home(agent, lot)
 
             logger.info(
                 f"[HomeManager] {agent.name} purchased {lot['id']} at "
@@ -139,3 +131,31 @@ class HomeManager:
             if lot["owner"] is None:
                 return lot
         return None
+
+    def _persist_home(self, agent, lot: dict) -> None:
+        """
+        Persists home lot ownership to the agents table so it survives restarts.
+        Token deduction is already handled by token_engine — this only writes
+        home_tile_x, home_tile_y, home_claimed columns.
+        """
+        try:
+            import psycopg2
+            from dotenv import load_dotenv
+            import os as _os
+            load_dotenv()
+            db_url = _os.getenv(
+                "DATABASE_URL",
+                "postgresql://postgres:password@localhost:5432/aicity"
+            )
+            with psycopg2.connect(db_url) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE agents
+                        SET home_tile_x = %s, home_tile_y = %s, home_claimed = TRUE
+                        WHERE name = %s
+                        """,
+                        (lot["x"], lot["y"], agent.name),
+                    )
+        except Exception as e:
+            logger.error(f"[HomeManager] DB persist failed for {agent.name}: {e}")

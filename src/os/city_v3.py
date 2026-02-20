@@ -169,6 +169,10 @@ class AICity:
             agent.mood_score = a.get("mood_score", 0.0)
             if a.get("cause_of_death"):
                 agent.cause_of_death = a["cause_of_death"]
+            # Phase 5: restore home ownership from saved state
+            agent.home_claimed  = a.get("home_claimed", False)
+            agent.home_tile_x   = a.get("home_tile_x", 0)
+            agent.home_tile_y   = a.get("home_tile_y", 0)
             token_engine.register_agent(agent.id)
             token_engine.earn(agent.id, a["tokens"], "restore")
             self.brains[agent.id] = AgentBrain(agent.id, agent.name, agent.role)
@@ -178,6 +182,17 @@ class AICity:
         self._init_phase3_systems()
         # Phase 5: assign starting positions on restore
         self.position_manager.assign_starting_positions(self.agents)
+        # Phase 5: re-mark home lots for agents who owned homes before restart
+        for agent in self.agents:
+            if agent.home_claimed and agent.home_tile_x > 0:
+                for lot in self.position_manager.home_lots:
+                    if lot["x"] == agent.home_tile_x and lot["y"] == agent.home_tile_y:
+                        lot["owner"] = agent.name
+                        break
+                for lot in self.home_manager.lots:
+                    if lot["x"] == agent.home_tile_x and lot["y"] == agent.home_tile_y:
+                        lot["owner"] = agent.name
+                        break
         if saved.get("last_paper"):
             self.city_news = saved["last_paper"].get("body", self.city_news)
 

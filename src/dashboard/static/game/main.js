@@ -26,20 +26,17 @@ const GAME_CONFIG = {
   // UIScene added in Sprint 3 when sprites are live
 };
 
-// Boot the game only when the container element exists
+// Boot the game only when the City tab is first clicked (called from app.js).
+// Do NOT auto-boot on page load — Phaser needs a visible container with real dimensions.
 function bootGame() {
   const container = document.getElementById('game-canvas');
   if (!container) {
     console.warn('[AIcity] #game-canvas not found — game not booted');
     return;
   }
+  if (window.AICITY_GAME) {
+    return; // Already booted — guard against double-call
+  }
   window.AICITY_GAME = new Phaser.Game(GAME_CONFIG);
   console.log('[AIcity] Phaser game booted.');
-}
-
-// Wait for DOM + Phaser CDN
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', bootGame);
-} else {
-  bootGame();
 }
