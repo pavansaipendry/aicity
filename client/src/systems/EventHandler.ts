@@ -14,7 +14,8 @@
 
 import {
   WSEvent, TilePlacedEvent, TileRemovedEvent, ConstructionProgressEvent,
-  AgentStateEvent, PositionsEvent, Agent,
+  AgentStateEvent, PositionsEvent, MessageEvent, MeetingEvent, Agent,
+  scaleToGrid,
 } from "@/types";
 import { IsoWorld }         from "@/engine/IsoWorld";
 import { CharacterManager } from "./CharacterManager";
@@ -85,6 +86,14 @@ export class EventHandler {
         if (b.agent) this._chars.addAgent(b.agent);
         break;
       }
+
+      case "message":
+        this._onMessage(event as MessageEvent);
+        break;
+
+      case "meeting":
+        this._onMeeting(event as MeetingEvent);
+        break;
 
       case "time_phase":
       case "agent_update":
@@ -171,5 +180,36 @@ export class EventHandler {
     const e = event as { type: "death"; agent: string; cause: string; day: number };
     this._chars.removeAgent(e.agent);
     this._callbacks.onDeath?.(e.agent, e.cause, e.day);
+  }
+
+  /**
+   * message event — move the sender 35% of the way toward the recipient.
+   * This makes every conversation physically visible on the iso map:
+   * agents drift toward each other when they talk.
+   */
+  private _onMessage(event: MessageEvent): void {
+    const senderPos    = this._chars.getPosition(event.from);
+    const recipientPos = this._chars.getPosition(event.to);
+    if (!senderPos || !recipientPos) return;
+
+    const tCol = Math.round(senderPos.col + (recipientPos.col - senderPos.col) * 0.35);
+    const tRow = Math.round(senderPos.row + (recipientPos.row - senderPos.row) * 0.35);
+    this._chars.moveAgentTo(event.from, tCol, tRow);
+  }
+
+  /**
+   * meeting event — both participants walk to the zone-centre position.
+   * The backend enriches each meeting event with zone_x / zone_y
+   * (zone centre in 96×72 Phase-5 space).  We convert to iso grid coords.
+   */
+  private _onMeeting(event: MeetingEvent): void {
+    const { col, row } = scaleToGrid(event.zone_x, event.zone_y);
+    for (const name of event.participants) {
+      // Walk each participant to the meeting spot with a small random offset
+      // so they don't all stack on the same tile.
+      const jCol = col + Math.round((Math.random() - 0.5) * 4);
+      const jRow = row + Math.round((Math.random() - 0.5) * 4);
+      this._chars.moveAgentTo(name, jCol, jRow);
+    }
   }
 }

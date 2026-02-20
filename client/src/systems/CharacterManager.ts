@@ -142,6 +142,24 @@ export class CharacterManager {
     this._spawnAgent(agent);
   }
 
+  /**
+   * Returns the current {col, row} of a named agent, or null if not found.
+   * Used by EventHandler to compute movement targets for message/meeting events.
+   */
+  getPosition(name: string): { col: number; row: number } | null {
+    const entry = this._agents.get(name);
+    if (!entry) return null;
+    return { col: entry.col, row: entry.row };
+  }
+
+  /**
+   * Publicly trigger A* movement for an agent (used by EventHandler on
+   * message and meeting events to make interactions physically visible).
+   */
+  moveAgentTo(name: string, col: number, row: number): void {
+    this._moveAgentTo(name, col, row);
+  }
+
   // ── Private: spawning ──────────────────────────────────────────────────────
 
   private _spawnAgent(agent: Agent): void {

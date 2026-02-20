@@ -445,6 +445,12 @@ class AICity:
                 position_manager=self.position_manager,
             )
             for me in meeting_events:
+                # Enrich with zone-centre coords so the frontend can
+                # physically walk meeting participants to the location.
+                _zone_id = me.get("location", "LOC_TOWN_SQUARE")
+                _zx, _zy = self.position_manager.get_zone_center(_zone_id)
+                me["zone_x"] = _zx
+                me["zone_y"] = _zy
                 self.daily_events.append(me)
                 _broadcast_sync(me)
 

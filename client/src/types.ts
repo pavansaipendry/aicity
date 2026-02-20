@@ -68,6 +68,20 @@ export interface MessageEvent {
   day:     number;
 }
 
+/**
+ * Two agents physically met (from MeetingManager).
+ * Participants should walk to zone_x/zone_y on the iso map.
+ */
+export interface MeetingEvent {
+  type:         "meeting";
+  participants: string[];   // [agent_a_name, agent_b_name]
+  location:     string;     // zone ID, e.g. "LOC_DARK_ALLEY"
+  zone_x:       number;     // zone centre in 96×72 space (set by city_v3.py)
+  zone_y:       number;
+  outcome:      string;
+  day:          number;
+}
+
 /** A tile_placed WS event broadcast when a tile changes. */
 export interface TilePlacedEvent {
   type:     "tile_placed";
@@ -137,6 +151,7 @@ export type WSEvent =
   | AgentStateEvent
   | PositionsEvent
   | MessageEvent
+  | MeetingEvent
   | { type: "time_phase";            phase: "dawn" | "morning" | "afternoon" | "dusk" | "night" }
   | { type: "death";                 agent: string; cause: string; day: number }
   | { type: "birth";                 agent: Agent }
