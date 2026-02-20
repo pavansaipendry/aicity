@@ -21,6 +21,12 @@ export interface Tile {
   built_day: number | null;
 }
 
+/** What an agent is currently doing — drives animation state. */
+export type AgentAction = "idle" | "walking" | "building" | "talking" | "chasing" | "fleeing";
+
+/** Which direction the agent is facing (for sprite flipping). */
+export type FacingDir = "north" | "south" | "east" | "west";
+
 /** Live agent state sent in WebSocket "state" and "agent_update" events. */
 export interface Agent {
   name:          string;
@@ -29,8 +35,15 @@ export interface Agent {
   age_days:      number;
   alive:         boolean;
   mood?:         string;
-  col?:          number;  // current tile position (Phase 6 adds this)
+  // Phase 5 position (96×72 grid — mapped to iso grid in frontend)
+  x?:            number;
+  y?:            number;
+  // Phase 6 iso grid position (0–63)
+  col?:          number;
   row?:          number;
+  // Phase 6 animation state
+  action?:       AgentAction;
+  facing?:       FacingDir;
 }
 
 /** Construction project in progress. */
@@ -69,25 +82,64 @@ export interface ConstructionProgressEvent {
   day:      number;
 }
 
+/**
+ * agent_state WS event — fired after each agent acts each day.
+ * Carries the agent's current position (in 96×72 space) and action type.
+ * Frontend maps x/y → col/row using scaleToGrid().
+ */
+export interface AgentStateEvent {
+  type:       "agent_state";
+  name:       string;
+  role:       string;
+  action:     AgentAction;
+  x:          number;   // position in 96×72 tile space
+  y:          number;
+  facing:     FacingDir;
+  day:        number;
+}
+
+/** Bulk position update — sent on each time-phase transition. */
+export interface PositionsEvent {
+  type:   "positions";
+  agents: Array<{ name: string; x: number; y: number; role: string; status: string }>;
+}
+
 /** The full state snapshot sent on WS connect / "state" event. */
 export interface WorldState {
-  day:           number;
-  agents:        Agent[];
-  vault:         number;
-  events:        unknown[];
-  messages:      unknown[];
-  relationships: unknown[];
+  day:              number;
+  agents:           Agent[];
+  vault:            number;
+  events:           unknown[];
+  messages:         unknown[];
+  relationships:    unknown[];
+  api_cost_today?:  number;
+  api_cost_total?:  number;
 }
 
 /** Union of all WebSocket event types the client can receive. */
 export type WSEvent =
-  | { type: "state";                data: WorldState }
+  | { type: "state";                 data: WorldState }
   | TilePlacedEvent
   | ConstructionProgressEvent
+  | AgentStateEvent
+  | PositionsEvent
   | MessageEvent
-  | { type: "positions";            agents: Array<{ name: string; col: number; row: number }> }
-  | { type: "time_phase";           phase: "dawn" | "morning" | "afternoon" | "dusk" | "night" }
-  | { type: "death";                agent: string; cause: string; day: number }
-  | { type: "birth";                agent: Agent }
+  | { type: "time_phase";            phase: "dawn" | "morning" | "afternoon" | "dusk" | "night" }
+  | { type: "death";                 agent: string; cause: string; day: number }
+  | { type: "birth";                 agent: Agent }
   | { type: "construction_complete"; project: ConstructionProject; day: number }
-  | { type: string;                 [key: string]: unknown };
+  | { type: string;                  [key: string]: unknown };
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Map a Phase 5 position (x in 0–96, y in 0–72) to the 64×64 iso grid.
+ * The Phase 5 PositionManager uses a 96×72 space.
+ * The Phase 6 iso world is 64×64 tiles.
+ */
+export function scaleToGrid(x: number, y: number): { col: number; row: number } {
+  return {
+    col: Math.min(63, Math.max(0, Math.round(x * 63 / 96))),
+    row: Math.min(63, Math.max(0, Math.round(y * 63 / 72))),
+  };
+}

@@ -53,6 +53,26 @@ except ImportError:
 
 console = Console()
 token_engine = TokenEngine()
+
+
+def _infer_action(action_text: str) -> str:
+    """
+    Map a natural-language decision action to a typed animation action.
+    The LLM returns strings like "patrols the market" or "constructs a wall".
+    We match keywords to drive the correct sprite animation on the frontend.
+    """
+    t = action_text.lower()
+    if any(w in t for w in ("build", "construct", "lay", "hammer", "craft", "repair")):
+        return "building"
+    if any(w in t for w in ("talk", "meet", "discuss", "greet", "negotiate", "convers")):
+        return "talking"
+    if any(w in t for w in ("chase", "pursue", "sprint", "arrest", "apprehend")):
+        return "chasing"
+    if any(w in t for w in ("flee", "escape", "run", "evade", "hide")):
+        return "fleeing"
+    if any(w in t for w in ("walk", "travel", "move", "patrol", "explore", "visit", "go to")):
+        return "walking"
+    return "idle"
 death_manager = DeathManager(memory_system=None, token_engine=token_engine)
 city_knowledge = CityKnowledge()
 newspaper = CityNewspaper()
@@ -654,6 +674,19 @@ class AICity:
 
         # Dashboard: per-agent update
         _broadcast_sync({"type": "agent_update", "agent": self._agent_to_dict(agent)})
+
+        # Phase 6: agent_state — tells the isometric canvas where this agent
+        # is standing and what they're doing so the character walks on screen.
+        _broadcast_sync({
+            "type":   "agent_state",
+            "name":   agent.name,
+            "role":   agent.role,
+            "action": _infer_action(decision.get("action", "")),
+            "x":      round(getattr(agent, "x", 48.0), 1),
+            "y":      round(getattr(agent, "y", 36.0), 1),
+            "facing": "south",
+            "day":    self.day,
+        })
 
 
     def _messenger_writes(self, persistence=None):
