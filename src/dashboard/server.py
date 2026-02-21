@@ -98,6 +98,19 @@ async def get_world():
         return []
 
 
+@app.get("/api/construction")
+async def get_construction():
+    """Return all active (non-complete) construction projects. Called once on page load."""
+    try:
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from src.world.construction_manager import get_all_active_projects
+        return get_all_active_projects()
+    except Exception as e:
+        logger.warning(f"Could not load construction projects: {e}")
+        return []
+
+
 @app.get("/api/stories")
 async def get_stories():
     """Return all stories from DB for the stories tab."""

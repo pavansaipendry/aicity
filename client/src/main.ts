@@ -11,14 +11,15 @@
  *   7. Open WebSocket → EventHandler routes events to IsoWorld + CharacterManager
  */
 
-import { Application }      from "pixi.js";
-import { IsoWorld }         from "@/engine/IsoWorld";
-import { Camera }           from "@/engine/Camera";
-import { WorldSocket }      from "@/ws/WorldSocket";
-import { EventHandler }     from "@/systems/EventHandler";
-import { PathFinder }       from "@/systems/PathFinder";
-import { CharacterManager } from "@/systems/CharacterManager";
-import { Tile }             from "@/types";
+import { Application }           from "pixi.js";
+import { IsoWorld }              from "@/engine/IsoWorld";
+import { Camera }                from "@/engine/Camera";
+import { WorldSocket }           from "@/ws/WorldSocket";
+import { EventHandler }          from "@/systems/EventHandler";
+import { PathFinder }            from "@/systems/PathFinder";
+import { CharacterManager }      from "@/systems/CharacterManager";
+import { ConstructionManager }   from "@/systems/ConstructionManager";
+import { Tile }                  from "@/types";
 
 async function boot(): Promise<void> {
   // ── 1. PixiJS v8 ─────────────────────────────────────────────────────────
@@ -48,6 +49,9 @@ async function boot(): Promise<void> {
   // ── 5. CharacterManager ──────────────────────────────────────────────────
   const chars = new CharacterManager(app, world.container, pathFinder);
 
+  // ── 5b. ConstructionManager ──────────────────────────────────────────────
+  const construction = new ConstructionManager(world.container, world, chars);
+
   // ── 6. Load initial world + seed pathfinder ──────────────────────────────
   try {
     const resp  = await fetch("/api/world");
@@ -64,7 +68,7 @@ async function boot(): Promise<void> {
   const wsUrl      = `${wsProtocol}://${window.location.host}/ws`;
 
   const socket  = new WorldSocket(wsUrl);
-  const handler = new EventHandler(world, chars, pathFinder, {
+  const handler = new EventHandler(world, chars, pathFinder, construction, {
     onState: (event) => {
       const data = event.data as { day: number; agents: unknown[] };
       console.log(`[state] Day ${data.day}, agents: ${data.agents.length}`);
@@ -86,10 +90,11 @@ async function boot(): Promise<void> {
 
   if (import.meta.env.DEV) {
     const w = window as unknown as Record<string, unknown>;
-    w._aiworld  = world;
-    w._aichars  = chars;
-    w._aisocket = socket;
-    console.log("[dev] _aiworld, _aichars, _aisocket on window");
+    w._aiworld        = world;
+    w._aichars        = chars;
+    w._aiconstruction = construction;
+    w._aisocket       = socket;
+    console.log("[dev] _aiworld, _aichars, _aiconstruction, _aisocket on window");
   }
 }
 

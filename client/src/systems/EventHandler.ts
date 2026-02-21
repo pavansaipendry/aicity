@@ -10,6 +10,11 @@
  * Sprint 3 addition: PathFinder is now injected so that tile_placed events
  * update the walkability grid in real time — agents route around new roads
  * and trees immediately after they're placed.
+ *
+ * Sprint 4 addition: ConstructionManager is injected.
+ * construction_progress → ConstructionManager.onProgress()  (progress bar + builder walk)
+ * construction_complete → ConstructionManager.onComplete()  (tear down progress bar)
+ * Both handlers also update IsoWorld + PathFinder for the final tile.
  */
 
 import {
@@ -17,9 +22,10 @@ import {
   AgentStateEvent, PositionsEvent, MessageEvent, MeetingEvent, Agent,
   scaleToGrid,
 } from "@/types";
-import { IsoWorld }         from "@/engine/IsoWorld";
-import { CharacterManager } from "./CharacterManager";
-import { PathFinder }       from "./PathFinder";
+import { IsoWorld }              from "@/engine/IsoWorld";
+import { CharacterManager }      from "./CharacterManager";
+import { PathFinder }            from "./PathFinder";
+import { ConstructionManager }   from "./ConstructionManager";
 
 export interface UICallbacks {
   onState?:         (data: WSEvent & { type: "state" }) => void;
@@ -29,21 +35,24 @@ export interface UICallbacks {
 }
 
 export class EventHandler {
-  private _world:      IsoWorld;
-  private _chars:      CharacterManager;
-  private _pathFinder: PathFinder;
-  private _callbacks:  UICallbacks;
+  private _world:        IsoWorld;
+  private _chars:        CharacterManager;
+  private _pathFinder:   PathFinder;
+  private _construction: ConstructionManager;
+  private _callbacks:    UICallbacks;
 
   constructor(
-    world:       IsoWorld,
-    chars:       CharacterManager,
-    pathFinder:  PathFinder,
-    callbacks:   UICallbacks = {},
+    world:        IsoWorld,
+    chars:        CharacterManager,
+    pathFinder:   PathFinder,
+    construction: ConstructionManager,
+    callbacks:    UICallbacks = {},
   ) {
-    this._world      = world;
-    this._chars      = chars;
-    this._pathFinder = pathFinder;
-    this._callbacks  = callbacks;
+    this._world        = world;
+    this._chars        = chars;
+    this._pathFinder   = pathFinder;
+    this._construction = construction;
+    this._callbacks    = callbacks;
   }
 
   handle(event: WSEvent): void {
@@ -138,21 +147,29 @@ export class EventHandler {
   }
 
   private _onConstructionProgress(event: ConstructionProgressEvent): void {
-    const { project } = event;
-    const tile = {
-      col:       project.target_col,
-      row:       project.target_row,
-      tile_type: `construction_${project.stage}`,
-      layer:     3,
-      built_by:  project.builders[0] ?? null,
-      built_day: event.day,
-    };
-    this._world.setTile(tile);
-    this._pathFinder.updateTile(tile);
+    // Delegate to ConstructionManager — handles progress bar, builder walk-to-site,
+    // and stage tile swap.
+    this._construction.onProgress(event);
+    // Keep PathFinder aware: construction tiles are blocked
+    if (event.project.stage > 0) {
+      this._pathFinder.updateTile({
+        col:       event.project.target_col,
+        row:       event.project.target_row,
+        tile_type: `construction_${event.project.stage}`,
+        layer:     3,
+        built_by:  event.project.builders[0] ?? null,
+        built_day: event.day,
+      });
+    }
   }
 
   private _onConstructionComplete(event: WSEvent & { type: "construction_complete" }): void {
-    const project = (event as unknown as ConstructionProgressEvent).project;
+    const ev = event as unknown as ConstructionProgressEvent;
+    const project = ev.project;
+
+    // Tear down progress bar + stage sprite
+    this._construction.onComplete(ev);
+
     if (project) {
       const tile = {
         col:       project.target_col,
@@ -162,6 +179,8 @@ export class EventHandler {
         built_by:  project.builders[0] ?? null,
         built_day: event.day as number,
       };
+      // The tile_placed event that follows will also update IsoWorld,
+      // but we set it here too for immediate visual feedback.
       this._world.setTile(tile);
       this._pathFinder.updateTile(tile);
     }

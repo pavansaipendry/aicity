@@ -44,6 +44,7 @@ from src.city.position_manager import PositionManager
 from src.city.home_manager import HomeManager
 from src.city.meeting_manager import MeetingManager
 from src.world import tile_manager as _tile_manager
+from src.world import construction_manager as _construction_mgr
 
 # Dashboard import — optional, won't crash if not running
 try:
@@ -473,6 +474,9 @@ class AICity:
                     f"Builders: {pe['builders']}. Benefit: {pe['benefit']}"
                 )
 
+        # Phase 6: visual construction tick — advance stages, broadcast progress
+        self._tick_construction()
+
         # Phase 4: gang system — daily formation and recruitment check
         gang_events = self.gang_system.run_daily(
             all_agents=[self._agent_to_dict(a) for a in self.agents if a.status == AgentStatus.ALIVE],
@@ -751,6 +755,10 @@ class AICity:
         # Phase 6: builder/explorer → world tile placement
         for _tile_event in _maybe_place_tile(agent, self.day):
             _broadcast_sync(_tile_event)
+
+        # Phase 6: builder → propose a visual construction project (10% chance)
+        if agent.role == "builder":
+            self._propose_construction(agent, decision)
 
 
     def _messenger_writes(self, persistence=None):
@@ -1227,6 +1235,181 @@ class AICity:
             _broadcast_sync({"type": "project_started", **event})
             # Builder contributes on day 1
             self.project_system.contribute(agent.name, self.day)
+
+    # ─── Phase 6: Visual construction system ─────────────────────────────────
+
+    # Project types a builder can propose, matched to action keywords
+    _CONSTRUCTION_KEYWORDS: dict[str, list[str]] = {
+        "market":         ["market", "stall", "trade", "shop"],
+        "house":          ["house", "home", "shelter", "dwelling", "residential"],
+        "school":         ["school", "education", "teach", "learn"],
+        "hospital":       ["hospital", "clinic", "heal", "medical"],
+        "police_station": ["police", "station", "law", "justice", "enforce"],
+        "warehouse":      ["warehouse", "storage", "store", "stockpile"],
+        "park":           ["park", "garden", "green", "nature", "trees"],
+    }
+
+    def _propose_construction(self, agent, decision: dict) -> None:
+        """
+        Called each turn for builder agents (10% chance).
+        Detects building-intent keywords in the decision action text,
+        picks a matching project type, and creates a construction_projects record.
+        Broadcasts a construction_progress event at stage 0 so the frontend
+        shows the new planned project immediately.
+        """
+        if random.random() > 0.10:
+            return
+
+        action_text = decision.get("action", "").lower()
+        chosen_type = None
+        for ptype, keywords in self._CONSTRUCTION_KEYWORDS.items():
+            if any(kw in action_text for kw in keywords):
+                chosen_type = ptype
+                break
+
+        if chosen_type is None:
+            # Builder is working, but action doesn't match a known building type —
+            # default to a house with low probability to keep city growing.
+            if random.random() < 0.3:
+                chosen_type = "house"
+            else:
+                return
+
+        # Check if there's already an active project of this type
+        # (limit to 1 active project per type to avoid clutter)
+        try:
+            active = _construction_mgr.get_all_active_projects()
+            types_active = {p["project_type"] for p in active}
+            if chosen_type in types_active:
+                return   # already one of these under construction
+
+            x = getattr(agent, "x", 48.0)
+            y = getattr(agent, "y", 36.0)
+            col, row = _construction_mgr.pick_build_location(chosen_type, x, y)
+
+            project_names = {
+                "market":         "Market Stall",
+                "house":          "Residential House",
+                "school":         "City School",
+                "hospital":       "Town Hospital",
+                "police_station": "Police Station",
+                "warehouse":      "Storage Warehouse",
+                "park":           "City Park",
+            }
+            name = project_names.get(chosen_type, chosen_type.replace("_", " ").title())
+            project = _construction_mgr.propose_project(
+                name=name,
+                project_type=chosen_type,
+                target_col=col,
+                target_row=row,
+                proposed_by=agent.name,
+                day=self.day,
+            )
+            # Immediately assign the proposing builder
+            _construction_mgr.assign_builder(project["id"], agent.name)
+            project = _construction_mgr.get_project(project["id"])
+
+            logger.info(
+                f"🏗️  {agent.name} proposed '{name}' at ({col},{row}) — "
+                f"project #{project['id']}"
+            )
+
+            # Broadcast construction_progress at stage 1 so the frontend
+            # renders the construction_1 tile (stakes in ground)
+            _broadcast_sync({
+                "type":         "construction_progress",
+                "project": {
+                    "id":           project["id"],
+                    "name":         project["name"],
+                    "tile_type":    project["tile_type"],
+                    "target_col":   project["target_col"],
+                    "target_row":   project["target_row"],
+                    "stage":        project["stage"],
+                    "total_stages": project["total_stages"],
+                    "builders":     project["builders"],
+                    "started_day":  project["created_day"],
+                },
+                "day": self.day,
+            })
+
+        except Exception as _exc:
+            logger.warning(f"[construction] propose failed for {agent.name}: {_exc}")
+
+    def _tick_construction(self) -> None:
+        """
+        Called once per day after all agents have acted.
+        Advances every active construction project by one day's work.
+        Broadcasts construction_progress events (and tile_placed on completion).
+        """
+        try:
+            active = _construction_mgr.get_all_active_projects()
+        except Exception as _exc:
+            logger.warning(f"[construction] tick failed to load projects: {_exc}")
+            return
+
+        for project in active:
+            if not project["builders"]:
+                continue   # no builders assigned yet — nothing to advance
+
+            try:
+                updated = _construction_mgr.advance_project(project["id"], self.day)
+
+                _broadcast_sync({
+                    "type":   "construction_progress",
+                    "project": {
+                        "id":           updated["id"],
+                        "name":         updated["name"],
+                        "tile_type":    updated["tile_type"],
+                        "target_col":   updated["target_col"],
+                        "target_row":   updated["target_row"],
+                        "stage":        updated["stage"],
+                        "total_stages": updated["total_stages"],
+                        "builders":     updated["builders"],
+                        "started_day":  updated["created_day"],
+                    },
+                    "day": self.day,
+                })
+
+                if updated["status"] == "complete":
+                    # Place the real building tile on the world grid
+                    tile = _tile_manager.place_tile(
+                        updated["target_col"],
+                        updated["target_row"],
+                        updated["tile_type"],
+                        layer=3,
+                        built_by=updated["proposed_by"],
+                        built_day=self.day,
+                    )
+                    _broadcast_sync({
+                        "type": "construction_complete",
+                        "project": {
+                            "id":           updated["id"],
+                            "name":         updated["name"],
+                            "tile_type":    updated["tile_type"],
+                            "target_col":   updated["target_col"],
+                            "target_row":   updated["target_row"],
+                            "stage":        5,
+                            "total_stages": updated["total_stages"],
+                            "builders":     updated["builders"],
+                            "started_day":  updated["created_day"],
+                        },
+                        "day": self.day,
+                    })
+                    _broadcast_sync({
+                        "type": "tile_placed",
+                        "tile": tile,
+                        "day":  self.day,
+                    })
+                    logger.info(
+                        f"🏛️  Construction complete: '{updated['name']}' "
+                        f"({updated['tile_type']}) at "
+                        f"({updated['target_col']},{updated['target_row']})"
+                    )
+
+            except Exception as _exc:
+                logger.warning(
+                    f"[construction] tick error for project #{project['id']}: {_exc}"
+                )
 
     # ─── Stage 5: Saboteur vs assets ─────────────────────────────────────────
 
