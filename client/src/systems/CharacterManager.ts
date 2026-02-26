@@ -62,9 +62,17 @@ interface AgentEntry {
   row:       number;
   role:      string;
   action:    AgentAction;
+  tokens:    number;
+  mood:      string;
   tween?:    gsap.core.Tween;
   bobOffset: number;   // current y offset from idle bob
 }
+
+/** Callback fired when an agent pawn is clicked. */
+export type AgentClickCallback = (
+  screenX: number, screenY: number,
+  info: { name: string; role: string; tokens: number; mood: string; action: AgentAction },
+) => void;
 
 
 export class CharacterManager {
@@ -72,6 +80,7 @@ export class CharacterManager {
   private _pathFinder: PathFinder;
   private _agents:     Map<string, AgentEntry> = new Map();
   private _bobTime     = 0;
+  private _onClick:    AgentClickCallback | null = null;
 
   constructor(app: Application, worldContainer: Container, pathFinder: PathFinder) {
     this._stage      = worldContainer;
@@ -80,6 +89,9 @@ export class CharacterManager {
     // Idle bob runs on every frame via PixiJS ticker
     app.ticker.add((ticker) => this._onTick(ticker.deltaTime));
   }
+
+  /** Register a callback for when an agent pawn is clicked. */
+  set onAgentClick(cb: AgentClickCallback) { this._onClick = cb; }
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
@@ -171,6 +183,13 @@ export class CharacterManager {
       col = agent.col; row = agent.row;
     }
     this._spawnAgentAt(agent.name, agent.role, col, row);
+
+    // Store extra metadata for tooltip
+    const entry = this._agents.get(agent.name);
+    if (entry) {
+      entry.tokens = agent.tokens ?? 0;
+      entry.mood   = agent.mood ?? "";
+    }
   }
 
   private _spawnAgentAt(name: string, role: string, col: number, row: number): void {
@@ -184,6 +203,20 @@ export class CharacterManager {
     container.addChild(label);
     container.sortableChildren = false;
 
+    // Make pawn clickable for tooltip
+    container.eventMode = "static";
+    container.cursor    = "pointer";
+    container.on("pointerdown", (e) => {
+      e.stopPropagation();
+      const entry = this._agents.get(name);
+      if (entry && this._onClick) {
+        this._onClick(
+          e.globalX, e.globalY,
+          { name, role: entry.role, tokens: entry.tokens, mood: entry.mood, action: entry.action },
+        );
+      }
+    });
+
     const { x, y } = tileToWorld(col, row);
     container.x = x;
     container.y = y;
@@ -196,6 +229,8 @@ export class CharacterManager {
       container, gfx, label,
       col, row, role,
       action: "idle",
+      tokens: 0,
+      mood: "",
       bobOffset: 0,
     });
   }

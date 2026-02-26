@@ -30,6 +30,8 @@ export interface UICallbacks {
   onStatus?:        (connected: boolean) => void;
   onDeath?:         (agentName: string, cause: string, day: number) => void;
   onBuildComplete?: (projectName: string, day: number) => void;
+  /** Camera auto-pan: called on dramatic events (death, arrest, construction). */
+  panTo?:           (col: number, row: number) => void;
 }
 
 export class EventHandler {
@@ -186,6 +188,8 @@ export class EventHandler {
       };
       this._world.setTile(tile);
       this._pathFinder.updateTile(tile);
+      // Auto-pan to completed building
+      this._callbacks.panTo?.(project.target_col, project.target_row);
     }
     this._callbacks.onBuildComplete?.(project?.name ?? "building", event.day as number);
   }
@@ -216,6 +220,9 @@ export class EventHandler {
         built_day: e.day,
       });
     }
+
+    // Auto-pan camera to the death location
+    if (pos) this._callbacks.panTo?.(pos.col, pos.row);
 
     this._callbacks.onDeath?.(e.agent, e.cause, e.day);
   }
@@ -289,7 +296,8 @@ export class EventHandler {
     const fleeRow = Math.max(0, Math.min(63, criminalPos.row + (criminalPos.row - policePos.row)));
     this._chars.moveAgentTo(criminalName, fleeCol, fleeRow);
 
-    // Arrest bubble
+    // Arrest bubble + auto-pan to the chase
     this._bubbles.show(policePos.col, policePos.row, `Arresting ${criminalName}!`);
+    this._callbacks.panTo?.(criminalPos.col, criminalPos.row);
   }
 }

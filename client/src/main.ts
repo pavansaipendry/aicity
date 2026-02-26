@@ -20,9 +20,13 @@ import { PathFinder }            from "@/systems/PathFinder";
 import { CharacterManager }      from "@/systems/CharacterManager";
 import { ConstructionManager }   from "@/systems/ConstructionManager";
 import { SpeechBubbleSystem }    from "@/systems/SpeechBubble";
+import { AgentTooltip }          from "@/systems/AgentTooltip";
+import { showLoading, hideLoading, showDisconnected, showReconnected } from "@/systems/Overlay";
 import { Tile }                  from "@/types";
 
 async function boot(): Promise<void> {
+  showLoading();
+
   // ── 1. PixiJS v8 ─────────────────────────────────────────────────────────
   const app = new Application();
   await app.init({
@@ -42,7 +46,7 @@ async function boot(): Promise<void> {
   app.stage.sortableChildren = true;
 
   // ── 3. Camera ────────────────────────────────────────────────────────────
-  new Camera(app, world.container);
+  const camera = new Camera(app, world.container);
 
   // ── 4. PathFinder ────────────────────────────────────────────────────────
   const pathFinder = new PathFinder();
@@ -55,6 +59,10 @@ async function boot(): Promise<void> {
 
   // ── 5c. SpeechBubbleSystem ─────────────────────────────────────────────
   const bubbles = new SpeechBubbleSystem(app, world.container);
+
+  // ── 5d. AgentTooltip ────────────────────────────────────────────────────
+  const tooltip = new AgentTooltip(app);
+  chars.onAgentClick = (sx, sy, info) => tooltip.show(sx, sy, info);
 
   // ── 6. Load initial world + seed pathfinder ──────────────────────────────
   try {
@@ -76,6 +84,7 @@ async function boot(): Promise<void> {
     onState: (event) => {
       const data = event.data as { day: number; agents: unknown[] };
       console.log(`[state] Day ${data.day}, agents: ${data.agents.length}`);
+      hideLoading();
     },
     onDeath: (name, cause, day) => {
       console.log(`[death] ${name} — ${cause} (Day ${day})`);
@@ -83,6 +92,7 @@ async function boot(): Promise<void> {
     onBuildComplete: (name, day) => {
       console.log(`[build] ${name} completed (Day ${day})`);
     },
+    panTo: (col, row) => camera.centerOnTile(col, row),
   });
 
   socket.on((event) => handler.handle(event));
@@ -90,6 +100,7 @@ async function boot(): Promise<void> {
   socket.onStatusChange = (connected) => {
     const dot = document.getElementById("ws-dot-v2");
     if (dot) dot.style.background = connected ? "#00ff41" : "#ff3131";
+    if (connected) showReconnected(); else showDisconnected();
   };
 
   if (import.meta.env.DEV) {
