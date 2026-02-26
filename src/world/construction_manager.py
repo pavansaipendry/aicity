@@ -84,13 +84,15 @@ FOOTPRINT: dict[str, tuple[int, int]] = {
 
 # ── Column names (shared by all SELECT queries) ───────────────────────────────
 _COLS = [
-    "id", "name", "project_type", "status", "stage", "progress_pct",
+    "id", "name", "project_type", "status", "stage", "total_stages",
+    "progress_pct",
     "target_col", "target_row", "width_tiles", "height_tiles", "tile_type",
     "proposed_by", "builders", "builder_days", "days_required",
     "created_day", "completed_day",
 ]
 _SELECT = """
-    SELECT id, name, project_type, status, stage, progress_pct,
+    SELECT id, name, project_type, status, stage, total_stages,
+           progress_pct,
            target_col, target_row, width_tiles, height_tiles, tile_type,
            proposed_by, builders, builder_days, days_required,
            created_day, completed_day

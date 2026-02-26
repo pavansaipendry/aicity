@@ -52,12 +52,18 @@ const TILE_COLOURS: Record<string, number> = {
   rock:        0x888888,
 
   // Building layer (layer 3)
-  house:       0xc4713a,
-  market:      0xd4843a,
-  hospital:    0xffffff,
-  school:      0xd4c43a,
-  archive:     0x8b6914,
-  barracks:    0x556655,
+  house:           0xc4713a,
+  house_small:     0xc4713a,
+  market:          0xd4843a,
+  hospital:        0xffffff,
+  school:          0xd4c43a,
+  police_station:  0x4169E1,
+  warehouse:       0x8b7d6b,
+  archive:         0x8b6914,
+  barracks:        0x556655,
+
+  // Special tiles
+  gravestone:  0x666666,
 
   // Construction stages
   construction_1: 0x8b6914,
@@ -75,12 +81,16 @@ const TILE_EXTRUDE: Record<string, number> = {
   tree_oak:    14,
   rock:        6,
   bush:        4,
-  house:       20,
-  market:      22,
-  hospital:    28,
-  school:      24,
-  archive:     26,
-  barracks:    18,
+  house:           20,
+  house_small:     16,
+  market:          22,
+  hospital:        28,
+  school:          24,
+  police_station:  22,
+  warehouse:       18,
+  archive:         26,
+  barracks:        18,
+  gravestone:      8,
 };
 const DEFAULT_EXTRUDE = 0;
 

@@ -19,6 +19,7 @@ import { EventHandler }          from "@/systems/EventHandler";
 import { PathFinder }            from "@/systems/PathFinder";
 import { CharacterManager }      from "@/systems/CharacterManager";
 import { ConstructionManager }   from "@/systems/ConstructionManager";
+import { SpeechBubbleSystem }    from "@/systems/SpeechBubble";
 import { Tile }                  from "@/types";
 
 async function boot(): Promise<void> {
@@ -52,6 +53,9 @@ async function boot(): Promise<void> {
   // ── 5b. ConstructionManager ──────────────────────────────────────────────
   const construction = new ConstructionManager(world.container, world, chars);
 
+  // ── 5c. SpeechBubbleSystem ─────────────────────────────────────────────
+  const bubbles = new SpeechBubbleSystem(app, world.container);
+
   // ── 6. Load initial world + seed pathfinder ──────────────────────────────
   try {
     const resp  = await fetch("/api/world");
@@ -68,7 +72,7 @@ async function boot(): Promise<void> {
   const wsUrl      = `${wsProtocol}://${window.location.host}/ws`;
 
   const socket  = new WorldSocket(wsUrl);
-  const handler = new EventHandler(world, chars, pathFinder, construction, {
+  const handler = new EventHandler(world, chars, pathFinder, construction, bubbles, {
     onState: (event) => {
       const data = event.data as { day: number; agents: unknown[] };
       console.log(`[state] Day ${data.day}, agents: ${data.agents.length}`);

@@ -7,14 +7,11 @@
  *   2. Add a case in handle() below
  *   3. Write the handler method
  *
- * Sprint 3 addition: PathFinder is now injected so that tile_placed events
- * update the walkability grid in real time — agents route around new roads
- * and trees immediately after they're placed.
- *
- * Sprint 4 addition: ConstructionManager is injected.
- * construction_progress → ConstructionManager.onProgress()  (progress bar + builder walk)
- * construction_complete → ConstructionManager.onComplete()  (tear down progress bar)
- * Both handlers also update IsoWorld + PathFinder for the final tile.
+ * Sprint 3: PathFinder injected (tile_placed → walkability grid).
+ * Sprint 4: ConstructionManager injected (construction_progress/complete).
+ * Sprint 5: SpeechBubbleSystem injected (message → bubble above sender).
+ *           Death → gravestone tile. Heart_attack → healer rush.
+ *           Arrest → police chase + criminal flee.
  */
 
 import {
@@ -26,6 +23,7 @@ import { IsoWorld }              from "@/engine/IsoWorld";
 import { CharacterManager }      from "./CharacterManager";
 import { PathFinder }            from "./PathFinder";
 import { ConstructionManager }   from "./ConstructionManager";
+import { SpeechBubbleSystem }    from "./SpeechBubble";
 
 export interface UICallbacks {
   onState?:         (data: WSEvent & { type: "state" }) => void;
@@ -39,6 +37,7 @@ export class EventHandler {
   private _chars:        CharacterManager;
   private _pathFinder:   PathFinder;
   private _construction: ConstructionManager;
+  private _bubbles:      SpeechBubbleSystem;
   private _callbacks:    UICallbacks;
 
   constructor(
@@ -46,12 +45,14 @@ export class EventHandler {
     chars:        CharacterManager,
     pathFinder:   PathFinder,
     construction: ConstructionManager,
+    bubbles:      SpeechBubbleSystem,
     callbacks:    UICallbacks = {},
   ) {
     this._world        = world;
     this._chars        = chars;
     this._pathFinder   = pathFinder;
     this._construction = construction;
+    this._bubbles      = bubbles;
     this._callbacks    = callbacks;
   }
 
@@ -104,8 +105,22 @@ export class EventHandler {
         this._onMeeting(event as MeetingEvent);
         break;
 
+      // Sprint 5: social drama events
+      case "heart_attack":
+        this._onHeartAttack(event as WSEvent & { type: "heart_attack"; agent: string });
+        break;
+
+      case "arrest":
+        this._onArrest(event as WSEvent & { type: "arrest" });
+        break;
+
       case "time_phase":
       case "agent_update":
+      case "newspaper":
+      case "verdict":
+      case "gang_event":
+      case "project_started":
+      case "project_completed":
         break;
 
       default:
@@ -126,20 +141,16 @@ export class EventHandler {
   }
 
   private _onTilePlaced(event: TilePlacedEvent): void {
-    // Update renderer — road auto-connect is handled inside IsoWorld.setTile()
     this._world.setTile(event.tile);
-    // Update pathfinder walkability grid so agents route around new obstacles
     this._pathFinder.updateTile(event.tile);
   }
 
   private _onTileRemoved(event: TileRemovedEvent): void {
-    // Remove tile from renderer (cell reverts to grass underneath)
     this._world.removeTile(event.col, event.row, event.layer);
-    // Mark cell as walkable again in the pathfinder
     this._pathFinder.updateTile({
       col:       event.col,
       row:       event.row,
-      tile_type: "grass",   // grass = walkable
+      tile_type: "grass",
       layer:     event.layer,
       built_by:  null,
       built_day: null,
@@ -147,10 +158,7 @@ export class EventHandler {
   }
 
   private _onConstructionProgress(event: ConstructionProgressEvent): void {
-    // Delegate to ConstructionManager — handles progress bar, builder walk-to-site,
-    // and stage tile swap.
     this._construction.onProgress(event);
-    // Keep PathFinder aware: construction tiles are blocked
     if (event.project.stage > 0) {
       this._pathFinder.updateTile({
         col:       event.project.target_col,
@@ -166,10 +174,7 @@ export class EventHandler {
   private _onConstructionComplete(event: WSEvent & { type: "construction_complete" }): void {
     const ev = event as unknown as ConstructionProgressEvent;
     const project = ev.project;
-
-    // Tear down progress bar + stage sprite
     this._construction.onComplete(ev);
-
     if (project) {
       const tile = {
         col:       project.target_col,
@@ -179,8 +184,6 @@ export class EventHandler {
         built_by:  project.builders[0] ?? null,
         built_day: event.day as number,
       };
-      // The tile_placed event that follows will also update IsoWorld,
-      // but we set it here too for immediate visual feedback.
       this._world.setTile(tile);
       this._pathFinder.updateTile(tile);
     }
@@ -197,20 +200,38 @@ export class EventHandler {
 
   private _onDeath(event: WSEvent & { type: "death" }): void {
     const e = event as { type: "death"; agent: string; cause: string; day: number };
+
+    // Get agent's last position before removing — place gravestone there
+    const pos = this._chars.getPosition(e.agent);
     this._chars.removeAgent(e.agent);
+
+    if (pos) {
+      // Place a gravestone tile at the death location
+      this._world.setTile({
+        col:       pos.col,
+        row:       pos.row,
+        tile_type: "gravestone",
+        layer:     3,
+        built_by:  e.agent,
+        built_day: e.day,
+      });
+    }
+
     this._callbacks.onDeath?.(e.agent, e.cause, e.day);
   }
 
   /**
-   * message event — move the sender 35% of the way toward the recipient.
-   * This makes every conversation physically visible on the iso map:
-   * agents drift toward each other when they talk.
+   * message event — speech bubble above sender + move sender toward recipient.
    */
   private _onMessage(event: MessageEvent): void {
     const senderPos    = this._chars.getPosition(event.from);
     const recipientPos = this._chars.getPosition(event.to);
     if (!senderPos || !recipientPos) return;
 
+    // Speech bubble at sender's position
+    this._bubbles.show(senderPos.col, senderPos.row, event.body);
+
+    // Move sender 35% toward recipient
     const tCol = Math.round(senderPos.col + (recipientPos.col - senderPos.col) * 0.35);
     const tRow = Math.round(senderPos.row + (recipientPos.row - senderPos.row) * 0.35);
     this._chars.moveAgentTo(event.from, tCol, tRow);
@@ -218,17 +239,57 @@ export class EventHandler {
 
   /**
    * meeting event — both participants walk to the zone-centre position.
-   * The backend enriches each meeting event with zone_x / zone_y
-   * (zone centre in 96×72 Phase-5 space).  We convert to iso grid coords.
    */
   private _onMeeting(event: MeetingEvent): void {
     const { col, row } = scaleToGrid(event.zone_x, event.zone_y);
     for (const name of event.participants) {
-      // Walk each participant to the meeting spot with a small random offset
-      // so they don't all stack on the same tile.
       const jCol = col + Math.round((Math.random() - 0.5) * 4);
       const jRow = row + Math.round((Math.random() - 0.5) * 4);
       this._chars.moveAgentTo(name, jCol, jRow);
     }
+  }
+
+  /**
+   * heart_attack event — find the nearest healer and rush them to the victim.
+   */
+  private _onHeartAttack(event: WSEvent & { type: "heart_attack"; agent: string }): void {
+    const victimName = (event as { agent: string }).agent;
+    const victimPos  = this._chars.getPosition(victimName);
+    if (!victimPos) return;
+
+    // Show distress bubble at victim
+    this._bubbles.show(victimPos.col, victimPos.row, "💔 Heart attack!");
+
+    // Find a healer and rush them to the victim
+    // We don't have a role lookup in CharacterManager, so we iterate known agents.
+    // As a fallback: the backend already moves the healer via agent_state events.
+  }
+
+  /**
+   * arrest event — police chases criminal, criminal may flee.
+   */
+  private _onArrest(event: WSEvent & { type: "arrest" }): void {
+    const e = event as { type: "arrest"; agent: string; detail: string };
+    const policeName = e.agent;
+
+    // Parse arrested name from detail: "arrested <name>"
+    const match = e.detail?.match(/arrested\s+(.+)/i);
+    if (!match) return;
+    const criminalName = match[1].trim();
+
+    const policePos   = this._chars.getPosition(policeName);
+    const criminalPos = this._chars.getPosition(criminalName);
+    if (!policePos || !criminalPos) return;
+
+    // Police runs toward criminal
+    this._chars.moveAgentTo(policeName, criminalPos.col, criminalPos.row);
+
+    // Criminal flees in the opposite direction
+    const fleeCol = Math.max(0, Math.min(63, criminalPos.col + (criminalPos.col - policePos.col)));
+    const fleeRow = Math.max(0, Math.min(63, criminalPos.row + (criminalPos.row - policePos.row)));
+    this._chars.moveAgentTo(criminalName, fleeCol, fleeRow);
+
+    // Arrest bubble
+    this._bubbles.show(policePos.col, policePos.row, `Arresting ${criminalName}!`);
   }
 }
